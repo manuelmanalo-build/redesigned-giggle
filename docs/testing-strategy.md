@@ -4,7 +4,7 @@
 
 The project should be built test-first where practical. Tests must prove the order submission, persistence, JMS processing, execution report, trade creation, idempotency, and error-handling behavior.
 
-No tests exist yet because the project is currently documentation-only.
+The current test suite includes pure domain unit tests, Spring Boot startup smoke tests, and PostgreSQL-backed persistence integration tests. API, JMS, and end-to-end tests should be added as those layers are implemented.
 
 ## Test Commands
 
@@ -16,6 +16,8 @@ mvn verify
 ```
 
 `mvn verify` should run integration tests that need Testcontainers.
+
+On Windows with Docker Desktop, the Maven build configures Surefire to use `DOCKER_HOST=tcp://localhost:2375` and docker-java `api.version=1.40`. Docker Desktop's unauthenticated TCP endpoint must be enabled locally for the PostgreSQL Testcontainers tests.
 
 ## Test Layers
 
@@ -73,8 +75,9 @@ Tools:
 
 Run against PostgreSQL Testcontainers:
 
-- Table constraints enforce unique idempotency keys and processed message IDs.
-- Foreign keys protect order, execution report, and trade relationships.
+- Core persistence tests currently verify save/find behavior for orders, execution reports, and trades.
+- Table constraints enforce unique idempotency keys.
+- Foreign keys protect execution report and trade relationships to orders.
 - Optimistic locking or conditional updates prevent conflicting order updates.
 - Query filters and pagination work for orders, execution reports, and trades.
 - Index-backed query paths are documented where relevant.
@@ -144,4 +147,3 @@ Later performance work may add:
 - JVM allocation and GC notes.
 - Listener concurrency experiments.
 - Database connection pool sizing notes.
-

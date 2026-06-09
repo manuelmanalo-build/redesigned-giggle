@@ -116,33 +116,38 @@ Concurrency requirements:
 
 ## Persistence Model
 
-Planned tables:
+Current MVP tables:
 
-- `accounts`
-- `instruments`
 - `orders`
 - `execution_reports`
 - `trades`
 - `idempotency_records`
+
+Planned later tables:
+
+- `accounts`
+- `instruments`
 - `processed_messages`
 
-Important constraints:
+Current constraints:
 
-- Unique account ID.
-- Unique instrument symbol.
-- Unique idempotency key.
-- Unique processed message ID.
-- Foreign keys from orders to accounts and instruments.
-- Foreign keys from execution reports and trades to orders.
+- `orders.quantity` must be positive.
+- `orders.filled_quantity` must be non-negative and cannot exceed `orders.quantity`.
+- Price columns must be positive when present.
+- `idempotency_records.idempotency_key` is the primary key.
+- Foreign keys from execution reports, trades, and idempotency records protect references to orders.
 
-Important indexes:
+Current indexes:
 
-- `orders(account_id, created_at)`
-- `orders(status, created_at)`
 - `orders(client_order_id)`
-- `execution_reports(order_id, created_at)`
-- `trades(order_id, created_at)`
-- `trades(account_id, instrument_id, created_at)`
+- `orders(account_id)`
+- `orders(symbol)`
+- `orders(status)`
+- `execution_reports(order_id)`
+- `trades(order_id)`
+- `idempotency_records(idempotency_key)`
+
+Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once list endpoints exist.
 
 ## Messaging Design
 
@@ -197,4 +202,3 @@ CI runtime:
 - JUnit 5.
 - Testcontainers for PostgreSQL and JMS integration tests.
 - GitHub Actions running `mvn clean verify`.
-

@@ -58,9 +58,16 @@ The project is intentionally small, but it contains the backend topics interview
 ## SQL and Persistence
 
 - PostgreSQL is the source of truth.
-- Tables include accounts, instruments, orders, execution reports, trades, idempotency records, and processed messages.
-- Foreign keys protect relationships.
-- Unique constraints enforce idempotency.
+- The current MVP schema includes `orders`, `execution_reports`, `trades`, and `idempotency_records`.
+- Account and instrument are currently persisted as explicit order/trade fields (`account_id`, `symbol`) to keep the first persistence step focused; separate reference-data tables remain a planned extension.
+- Foreign keys protect execution report, trade, and idempotency references to orders.
+- The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
+- Numeric price columns use `NUMERIC(19, 4)` to avoid floating-point money errors.
+- Quantity columns use integer types with positive check constraints because order quantities are discrete in the MVP.
+- `orders.client_order_id` supports client/FIX-style lookup by `ClOrdID`.
+- `orders.account_id`, `orders.symbol`, and `orders.status` indexes support common query filters and operational screens.
+- `execution_reports.order_id` and `trades.order_id` indexes support order-lifecycle history reads.
+- The separate `idempotency_records.idempotency_key` index is redundant with the primary key in PostgreSQL, but it is intentionally listed in the migration to satisfy the explicit MVP indexing requirement and make the access path obvious during review.
 - Transactions define when order submission and message consumption become durable.
 - Testcontainers proves behavior against real PostgreSQL.
 
@@ -114,4 +121,3 @@ The project does not implement FIX, but it maps naturally to FIX vocabulary:
 - `ExecID` maps to `executionReportId`.
 
 The order lifecycle demonstrates accepted, rejected, partially filled, and filled states without requiring real market connectivity.
-

@@ -53,7 +53,9 @@ mvn test
 mvn verify
 ```
 
-The current skeleton has smoke tests only. Once Docker-backed integration tests are added, ensure Docker is running before `mvn verify`.
+The current suite includes domain unit tests, startup smoke tests, and PostgreSQL Testcontainers integration tests. Ensure Docker is running before `mvn verify`.
+
+The persistence test suite uses PostgreSQL Testcontainers. On Windows with Docker Desktop, Maven activates a Windows-only Surefire profile that expects Docker Desktop's TCP endpoint on `tcp://localhost:2375` and pins docker-java to API version `1.40`.
 
 ## Local Run Commands
 

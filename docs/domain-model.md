@@ -213,6 +213,81 @@ The MVP simulator should be deterministic for tests. Recommended initial rules:
 - Duplicate message delivery must not create duplicate execution reports or trades.
 - Current order status must agree with cumulative execution state.
 
+## Current Persistence Schema
+
+The first persistence migration implements the core trade-processing tables only. Account and instrument remain domain concepts represented by `account_id` and `symbol` fields until reference-data persistence is added.
+
+### `orders`
+
+Columns:
+
+- `id`: primary key, maps to `OrderId`.
+- `client_order_id`: optional client-supplied identifier for future API idempotency and FIX `ClOrdID` discussion.
+- `account_id`: non-null account identifier.
+- `symbol`: non-null instrument symbol.
+- `side`: `BUY` or `SELL`.
+- `type`: `MARKET` or `LIMIT`.
+- `status`: current `OrderStatus`.
+- `quantity`: positive order quantity.
+- `limit_price`: nullable positive price for limit orders.
+- `filled_quantity`: non-negative cumulative filled quantity, constrained to be less than or equal to `quantity`.
+- `created_at`, `updated_at`: persistence timestamps.
+
+Indexes:
+
+- `idx_orders_client_order_id`
+- `idx_orders_account_id`
+- `idx_orders_symbol`
+- `idx_orders_status`
+
+### `execution_reports`
+
+Columns:
+
+- `id`: primary key, maps to `ExecutionReportId`.
+- `order_id`: non-null foreign key to `orders(id)`.
+- `execution_type`: `ExecutionType`.
+- `order_status`: order status after the report.
+- `executed_quantity`: nullable positive quantity for fills and partial fills.
+- `execution_price`: nullable positive price for fills and partial fills.
+- `message`: optional rejection or lifecycle message.
+- `created_at`: report creation timestamp.
+
+Index:
+
+- `idx_execution_reports_order_id`
+
+### `trades`
+
+Columns:
+
+- `id`: primary key, maps to `TradeId`.
+- `order_id`: non-null foreign key to `orders(id)`.
+- `account_id`
+- `symbol`
+- `side`
+- `quantity`: positive executed quantity.
+- `price`: positive execution price.
+- `created_at`: trade creation timestamp.
+
+Index:
+
+- `idx_trades_order_id`
+
+### `idempotency_records`
+
+Columns:
+
+- `idempotency_key`: primary key.
+- `request_hash`: hash or fingerprint of the original request.
+- `order_id`: nullable foreign key to `orders(id)`.
+- `response_status`: HTTP response status to replay for duplicate submissions.
+- `created_at`: record creation timestamp.
+
+Index:
+
+- `idx_idempotency_records_idempotency_key`
+
 ## FIX Vocabulary Mapping
 
 The project may discuss simplified FIX mappings without implementing FIX:

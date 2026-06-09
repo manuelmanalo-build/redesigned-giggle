@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system will accept orders through REST, validate and persist them, publish order-submitted events to JMS, process those events asynchronously, simulate executions, create execution reports and trades, update order state, and expose query APIs.
 
-The repository currently contains the initial Spring Boot skeleton and documentation. Business features are intentionally not implemented yet.
+The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, and container-backed persistence integration tests. REST, JMS, and application orchestration are intentionally still pending.
 
 ## Project Summary
 
@@ -85,6 +85,8 @@ Run tests:
 mvn test
 ```
 
+On Windows with Docker Desktop, Testcontainers is configured to use `tcp://localhost:2375` and Docker API `1.40` during Maven test runs. Keep Docker Desktop's unauthenticated TCP option enabled for local Testcontainers tests.
+
 Run the full build:
 
 ```bash
@@ -139,8 +141,8 @@ Expected workflow:
 
 ## Testing
 
-The intended test strategy includes domain unit tests, application service tests, API slice tests, PostgreSQL integration tests, JMS integration tests, and end-to-end flow tests.
+The current test suite includes domain unit tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for the core persistence schema. The intended strategy also includes application service tests, API slice tests, JMS integration tests, and end-to-end flow tests as those layers are implemented.
 
 See [docs/testing-strategy.md](docs/testing-strategy.md).
 
-The current skeleton includes only startup and test-stack smoke tests.
+Docker must be running for the PostgreSQL integration tests.
