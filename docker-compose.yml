@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trade-simulator-postgres
+    environment:
+      POSTGRES_DB: trade_simulator
+      POSTGRES_USER: trade_user
+      POSTGRES_PASSWORD: trade_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trade_user -d trade_simulator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  artemis:
+    image: apache/activemq-artemis:2.33.0
+    container_name: trade-simulator-artemis
+    environment:
+      ARTEMIS_USER: artemis
+      ARTEMIS_PASSWORD: artemis
+      ANONYMOUS_LOGIN: "false"
+    ports:
+      - "61616:61616"
+      - "8161:8161"
+    volumes:
+      - artemis-data:/var/lib/artemis-instance
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/artemis-instance/etc/broker.xml"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  artemis-data:
+

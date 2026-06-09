@@ -1,0 +1,43 @@
+# Java and Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs
+*.log
+logs/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.properties
+!src/main/resources/application-local.yml
+
+# Test and coverage output
+coverage/
+*.exec
+
+# Docker and local runtime
+docker-data/
+tmp/
+temp/
+
+# Project-local toolchain downloads
+.toolchain/
+downloads/

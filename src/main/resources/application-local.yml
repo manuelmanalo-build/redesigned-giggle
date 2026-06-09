@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/trade_simulator
+    username: trade_user
+    password: trade_password
+  artemis:
+    broker-url: tcp://localhost:61616
+    user: artemis
+    password: artemis
+  jpa:
+    show-sql: false
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
