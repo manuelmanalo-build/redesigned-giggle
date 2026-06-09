@@ -2,16 +2,16 @@
 
 ## Purpose
 
-This document defines the intended REST API contract for the MVP. The API is not implemented yet.
+This document defines the REST API contract for the current MVP implementation and the next planned API extensions.
 
 ## API Principles
 
 - Base path: `/api/v1`.
 - JSON request and response bodies.
 - API DTOs must be separate from JPA entities.
-- `POST /orders` is asynchronous and returns `202 Accepted` for accepted submissions.
+- `POST /orders` currently persists and accepts a valid order synchronously, then returns `201 Created`.
 - All `POST /orders` requests require `Idempotency-Key`.
-- `X-Correlation-Id` is accepted from clients and returned in responses.
+- `X-Correlation-Id` is accepted from clients and included in error responses. A server-generated correlation ID is used when absent.
 - Pagination should use `page` and `size`.
 - Timestamps should use ISO-8601 UTC format.
 
@@ -26,8 +26,8 @@ This document defines the intended REST API contract for the MVP. The API is not
 
 ### Response Headers
 
-- `X-Correlation-Id`: correlation ID used for the request.
-- `Location`: recommended on successful order submission, pointing to `/api/v1/orders/{orderId}`.
+- `X-Correlation-Id`: planned response header for the correlation ID used for the request.
+- `Location`: planned response header on successful order submission, pointing to `/api/v1/orders/{orderId}`.
 
 ## Endpoints
 
@@ -35,7 +35,7 @@ This document defines the intended REST API contract for the MVP. The API is not
 
 `POST /api/v1/orders`
 
-Submits an order for asynchronous processing.
+Validates, persists, and accepts an order. JMS publication is intentionally not implemented yet.
 
 Required header:
 
@@ -45,45 +45,51 @@ Request body:
 
 ```json
 {
-  "clientOrderId": "CLIENT-ORDER-123",
+  "clientOrderId": "CLIENT-123",
   "accountId": "ACC-001",
   "symbol": "AAPL",
   "side": "BUY",
-  "orderType": "LIMIT",
+  "type": "LIMIT",
   "quantity": 100,
-  "limitPrice": 185.25,
-  "timeInForce": "DAY"
+  "limitPrice": 185.50
 }
 ```
 
 Validation rules:
 
-- `clientOrderId` is optional but recommended.
-- `accountId` is required and must reference an active account.
-- `symbol` is required and must reference a known active instrument.
+- `clientOrderId` is required, non-blank, and at most 128 characters.
+- `accountId` is required, non-blank, and at most 128 characters.
+- `symbol` is required, non-blank, and at most 32 characters. It is normalized to uppercase by the domain model.
 - `side` must be `BUY` or `SELL`.
-- `orderType` must be `MARKET` or `LIMIT`.
+- `type` must be `MARKET` or `LIMIT`.
 - `quantity` must be positive.
-- `limitPrice` is required for `LIMIT` orders.
-- `limitPrice` must be absent or ignored for `MARKET` orders, depending on implementation decision.
+- `limitPrice` is required and positive for `LIMIT` orders.
+- `limitPrice` must be absent for `MARKET` orders.
 
 Successful response:
 
-- Status: `202 Accepted`
+- Status: `201 Created`
 
 ```json
 {
-  "orderId": "ord_123",
-  "clientOrderId": "CLIENT-ORDER-123",
+  "orderId": "b19a2c07-4cd8-4f39-bd2a-5a785dd4697f",
+  "clientOrderId": "CLIENT-123",
+  "accountId": "ACC-001",
+  "symbol": "AAPL",
+  "side": "BUY",
+  "type": "LIMIT",
   "status": "ACCEPTED",
-  "message": "Order accepted for asynchronous processing",
-  "submittedAt": "2026-06-09T15:30:00Z"
+  "quantity": 100,
+  "limitPrice": 185.50,
+  "filledQuantity": 0,
+  "createdAt": "2026-06-09T15:30:00Z",
+  "updatedAt": "2026-06-09T15:30:00Z"
 }
 ```
 
 Idempotent replay:
 
-- Same `Idempotency-Key` and same request fingerprint returns the original logical response.
+- Same `Idempotency-Key` and same normalized request fingerprint returns the original logical response and response status.
 - Same `Idempotency-Key` with a different request fingerprint returns `409 Conflict`.
 
 ### Get Order
@@ -104,19 +110,38 @@ Response fields:
 - `accountId`
 - `symbol`
 - `side`
-- `orderType`
+- `type`
 - `quantity`
 - `limitPrice`
 - `filledQuantity`
-- `remainingQuantity`
-- `averageExecutionPrice`
 - `status`
 - `createdAt`
 - `updatedAt`
 
+Current response example:
+
+```json
+{
+  "orderId": "b19a2c07-4cd8-4f39-bd2a-5a785dd4697f",
+  "clientOrderId": "CLIENT-123",
+  "accountId": "ACC-001",
+  "symbol": "AAPL",
+  "side": "BUY",
+  "type": "LIMIT",
+  "status": "ACCEPTED",
+  "quantity": 100,
+  "limitPrice": 185.50,
+  "filledQuantity": 0,
+  "createdAt": "2026-06-09T15:30:00Z",
+  "updatedAt": "2026-06-09T15:30:00Z"
+}
+```
+
 ### Search Orders
 
 `GET /api/v1/orders`
+
+Planned, not implemented yet.
 
 Query parameters:
 
@@ -142,9 +167,22 @@ Responses:
 - `200 OK` when the order exists.
 - `404 Not Found` when the order is missing.
 
+Response fields:
+
+- `executionReportId`
+- `orderId`
+- `executionType`
+- `orderStatus`
+- `executedQuantity`
+- `executionPrice`
+- `message`
+- `createdAt`
+
 ### Get Execution Report
 
 `GET /api/v1/execution-reports/{executionReportId}`
+
+Planned, not implemented yet.
 
 Returns a single execution report.
 
@@ -156,6 +194,8 @@ Responses:
 ### Search Execution Reports
 
 `GET /api/v1/execution-reports`
+
+Planned, not implemented yet.
 
 Query parameters:
 
@@ -181,9 +221,22 @@ Responses:
 - `200 OK` when the order exists.
 - `404 Not Found` when the order is missing.
 
+Response fields:
+
+- `tradeId`
+- `orderId`
+- `accountId`
+- `symbol`
+- `side`
+- `quantity`
+- `price`
+- `createdAt`
+
 ### Get Trade
 
 `GET /api/v1/trades/{tradeId}`
+
+Planned, not implemented yet.
 
 Returns a single trade.
 
@@ -195,6 +248,8 @@ Responses:
 ### Search Trades
 
 `GET /api/v1/trades`
+
+Planned, not implemented yet.
 
 Query parameters:
 
@@ -224,27 +279,19 @@ All API errors should use a consistent response shape:
 {
   "timestamp": "2026-06-09T15:30:00Z",
   "status": 400,
-  "error": "Bad Request",
-  "code": "ORDER_VALIDATION_FAILED",
-  "message": "Order request is invalid",
+  "errorCode": "VALIDATION_ERROR",
+  "message": "quantity must be greater than 0",
   "path": "/api/v1/orders",
-  "correlationId": "corr-123",
-  "fieldErrors": [
-    {
-      "field": "quantity",
-      "message": "must be greater than zero"
-    }
-  ]
+  "correlationId": "corr-123"
 }
 ```
 
 ## Status Codes
 
 - `200 OK`: successful read.
-- `202 Accepted`: order accepted for asynchronous processing.
+- `201 Created`: order persisted and accepted.
 - `400 Bad Request`: malformed request or field validation error.
 - `404 Not Found`: requested resource does not exist.
 - `409 Conflict`: idempotency key conflict or invalid state conflict.
 - `422 Unprocessable Entity`: optional domain-rule failure status if adopted.
 - `500 Internal Server Error`: unexpected failure.
-

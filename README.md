@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system will accept orders through REST, validate and persist them, publish order-submitted events to JMS, process those events asynchronously, simulate executions, create execution reports and trades, update order state, and expose query APIs.
 
-The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, and container-backed persistence integration tests. REST, JMS, and application orchestration are intentionally still pending.
+The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, and container-backed integration tests. JMS publication and asynchronous execution processing are intentionally still pending.
 
 ## Project Summary
 
@@ -141,7 +141,7 @@ Expected workflow:
 
 ## Testing
 
-The current test suite includes domain unit tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for the core persistence schema. The intended strategy also includes application service tests, API slice tests, JMS integration tests, and end-to-end flow tests as those layers are implemented.
+The current test suite includes domain unit tests, controller validation tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for persistence and REST API behavior. The intended strategy also includes JMS integration tests and end-to-end flow tests as those layers are implemented.
 
 See [docs/testing-strategy.md](docs/testing-strategy.md).
 

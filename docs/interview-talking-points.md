@@ -49,11 +49,13 @@ The project is intentionally small, but it contains the backend topics interview
 
 ## REST
 
-- `POST /api/v1/orders` returns `202 Accepted` because execution is asynchronous.
-- `Idempotency-Key` makes client retries safe.
-- `X-Correlation-Id` connects API logs to JMS processing logs.
+- `POST /api/v1/orders` currently returns `201 Created` because the implemented MVP persists and accepts the order synchronously; this can move back to `202 Accepted` when JMS publication and asynchronous processing are introduced.
+- `Idempotency-Key` makes client retries safe by replaying the original logical response for the same normalized request.
+- Reusing an idempotency key with a different normalized request returns `409 Conflict`.
+- Jakarta Bean Validation handles request-shape checks, while domain objects enforce business rules such as market/limit price requirements.
+- `X-Correlation-Id` is accepted from clients and included in error responses; later observability work should propagate it through logs and JMS messages.
 - `GET` endpoints expose current order state, execution reports, and trades.
-- Error responses are consistent and do not leak internals.
+- Error responses are consistent and include timestamp, HTTP status, error code, message, path, and correlation ID.
 
 ## SQL and Persistence
 
@@ -62,6 +64,8 @@ The project is intentionally small, but it contains the backend topics interview
 - Account and instrument are currently persisted as explicit order/trade fields (`account_id`, `symbol`) to keep the first persistence step focused; separate reference-data tables remain a planned extension.
 - Foreign keys protect execution report, trade, and idempotency references to orders.
 - The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
+- Order submission stores the order and idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
+- The request hash is based on normalized business fields, so superficial JSON formatting differences do not create false idempotency conflicts.
 - Numeric price columns use `NUMERIC(19, 4)` to avoid floating-point money errors.
 - Quantity columns use integer types with positive check constraints because order quantities are discrete in the MVP.
 - `orders.client_order_id` supports client/FIX-style lookup by `ClOrdID`.
