@@ -1,6 +1,10 @@
 package com.realtimetradeprocessing.simulator.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -10,7 +14,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -34,13 +40,16 @@ import com.realtimetradeprocessing.simulator.domain.Trade;
 import com.realtimetradeprocessing.simulator.domain.TradeId;
 import com.realtimetradeprocessing.simulator.domain.AccountId;
 import com.realtimetradeprocessing.simulator.domain.InstrumentSymbol;
+import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
+import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 
 @SpringBootTest(properties = {
-    "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration"
+    "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
+    "trade.messaging.jms-listener-enabled=false"
 })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -73,8 +82,13 @@ class OrderApiIntegrationTest {
     @Autowired
     private TradeJpaRepository tradeRepository;
 
+    @MockBean
+    private OrderEventPublisher orderEventPublisher;
+
     @Test
     void submitsAndRetrievesOrder() throws Exception {
+        clearInvocations(orderEventPublisher);
+
         MvcResult result = submitOrder("idem-api-submit", validLimitOrderJson())
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.clientOrderId").value("CLIENT-123"))
@@ -92,6 +106,14 @@ class OrderApiIntegrationTest {
         String orderId = body.get("orderId").asText();
         assertThat(orderId).isNotBlank();
 
+        ArgumentCaptor<OrderSubmittedEvent> eventCaptor = ArgumentCaptor.forClass(OrderSubmittedEvent.class);
+        verify(orderEventPublisher).publishOrderSubmitted(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().orderId()).isEqualTo(orderId);
+        assertThat(eventCaptor.getValue().clientOrderId()).isEqualTo("CLIENT-123");
+        assertThat(eventCaptor.getValue().accountId()).isEqualTo("ACC-001");
+        assertThat(eventCaptor.getValue().symbol()).isEqualTo("AAPL");
+        assertThat(eventCaptor.getValue().correlationId()).isEqualTo("corr-idem-api-submit");
+
         mockMvc.perform(get("/api/v1/orders/{orderId}", orderId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.orderId").value(orderId))
@@ -100,6 +122,8 @@ class OrderApiIntegrationTest {
 
     @Test
     void returnsSameLogicalResponseForSameIdempotencyKeyAndRequest() throws Exception {
+        clearInvocations(orderEventPublisher);
+
         JsonNode first = objectMapper.readTree(submitOrder("idem-api-replay", validLimitOrderJson())
             .andExpect(status().isCreated())
             .andReturn()
@@ -114,10 +138,13 @@ class OrderApiIntegrationTest {
 
         assertThat(second.get("orderId").asText()).isEqualTo(first.get("orderId").asText());
         assertThat(second.get("clientOrderId").asText()).isEqualTo("CLIENT-123");
+        verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void returnsConflictForSameIdempotencyKeyAndDifferentRequest() throws Exception {
+        clearInvocations(orderEventPublisher);
+
         submitOrder("idem-api-conflict", validLimitOrderJson())
             .andExpect(status().isCreated());
 
@@ -134,10 +161,34 @@ class OrderApiIntegrationTest {
                 """)
             .andExpect(status().isConflict())
             .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"));
+
+        verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void doesNotPublishEventForInvalidOrderRequest() throws Exception {
+        clearInvocations(orderEventPublisher);
+
+        submitOrder("idem-api-invalid", """
+                {
+                  "clientOrderId": "CLIENT-123",
+                  "accountId": "ACC-001",
+                  "symbol": "AAPL",
+                  "side": "BUY",
+                  "type": "LIMIT",
+                  "quantity": 0,
+                  "limitPrice": 185.50
+                }
+                """)
+            .andExpect(status().isBadRequest());
+
+        verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void retrievesExecutionReportsAndTradesForOrder() throws Exception {
+        clearInvocations(orderEventPublisher);
+
         JsonNode order = objectMapper.readTree(submitOrder("idem-api-history", validLimitOrderJson())
             .andExpect(status().isCreated())
             .andReturn()

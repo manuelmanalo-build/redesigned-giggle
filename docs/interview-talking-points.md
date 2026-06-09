@@ -25,7 +25,7 @@ The project is intentionally small, but it contains the backend topics interview
 ## Data Structures
 
 - Database indexes support lookup by order ID, account, symbol, status, and creation time.
-- Unique constraints enforce idempotency and message deduplication.
+- Primary keys enforce request idempotency and deterministic report/trade IDs make duplicate message side effects detectable.
 - Queues model asynchronous order processing.
 - Ordered execution reports provide lifecycle history.
 - Pagination protects list APIs from unbounded result sets.
@@ -35,8 +35,9 @@ The project is intentionally small, but it contains the backend topics interview
 - REST handlers process many client submissions concurrently.
 - JMS listener concurrency allows multiple orders to process in parallel.
 - Idempotency keys protect client retries.
-- Processed-message records protect against duplicate JMS delivery.
-- Optimistic locking or guarded updates protect order state.
+- Current duplicate delivery protection uses deterministic execution-report/trade IDs derived from the event ID.
+- The consumer locks the order row while it decides whether to create an execution report, create a trade, and update order state.
+- A production extension would add a dedicated processed-message inbox table for richer retry/DLQ diagnostics.
 - Domain services should avoid mutable shared state.
 
 ## JVM and GC Awareness
@@ -49,11 +50,11 @@ The project is intentionally small, but it contains the backend topics interview
 
 ## REST
 
-- `POST /api/v1/orders` currently returns `201 Created` because the implemented MVP persists and accepts the order synchronously; this can move back to `202 Accepted` when JMS publication and asynchronous processing are introduced.
+- `POST /api/v1/orders` currently returns `201 Created` after persisting the accepted order and registering JMS publication; this can move back to `202 Accepted` when asynchronous execution processing owns more of the lifecycle.
 - `Idempotency-Key` makes client retries safe by replaying the original logical response for the same normalized request.
 - Reusing an idempotency key with a different normalized request returns `409 Conflict`.
 - Jakarta Bean Validation handles request-shape checks, while domain objects enforce business rules such as market/limit price requirements.
-- `X-Correlation-Id` is accepted from clients and included in error responses; later observability work should propagate it through logs and JMS messages.
+- `X-Correlation-Id` is accepted from clients, included in error responses, and carried into `OrderSubmittedEvent`.
 - `GET` endpoints expose current order state, execution reports, and trades.
 - Error responses are consistent and include timestamp, HTTP status, error code, message, path, and correlation ID.
 
@@ -65,6 +66,7 @@ The project is intentionally small, but it contains the backend topics interview
 - Foreign keys protect execution report, trade, and idempotency references to orders.
 - The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
 - Order submission stores the order and idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
+- Order-submitted publication runs after transaction commit, so rolled-back orders are not emitted to JMS.
 - The request hash is based on normalized business fields, so superficial JSON formatting differences do not create false idempotency conflicts.
 - Numeric price columns use `NUMERIC(19, 4)` to avoid floating-point money errors.
 - Quantity columns use integer types with positive check constraints because order quantities are discrete in the MVP.
@@ -78,8 +80,16 @@ The project is intentionally small, but it contains the backend topics interview
 ## JMS
 
 - ActiveMQ Artemis decouples API submission from execution processing.
-- `orders.submitted.v1` is the initial durable queue.
-- Message payloads include event identity, schema version, order ID, and correlation ID.
+- `order.submitted` is the initial durable queue.
+- `OrderEventPublisher` is an application-facing abstraction, so the order service is not coupled directly to `JmsTemplate`.
+- `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` explicitly as JSON and sets JMS metadata such as event type, event ID, order ID, and correlation ID.
+- Message payloads include event identity, order ID, client order ID, account ID, symbol, side, type, quantity, limit price, correlation ID, and creation time.
+- `OrderSubmittedEventConsumer` deserializes JSON explicitly, puts the correlation ID into logging context, and delegates business work to `OrderExecutionProcessor`.
+- `ExecutionSimulator` is an abstraction, which keeps market/limit execution rules testable and replaceable.
+- MARKET orders fill at the configured simulated market price; LIMIT orders fill only when the buy/sell limit crosses that price.
+- The processor writes execution reports, trades, and order updates in one transaction.
+- The MVP uses direct after-commit JMS publication instead of a transactional outbox. This is simpler and explainable, but a crash or broker outage after database commit can lose an event.
+- A production-grade extension would add an outbox table and relay to retry publication independently.
 - Consumers are idempotent because JMS can redeliver messages.
 - Retry and DLQ behavior are part of the design, even if broker defaults are used first.
 

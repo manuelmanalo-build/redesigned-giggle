@@ -126,6 +126,16 @@ public class OrderEntity {
         );
     }
 
+    public void markFilled(long filledQuantity, Instant updatedAt) {
+        this.status = OrderStatus.FILLED;
+        this.filledQuantity = filledQuantity;
+        this.updatedAt = updatedAt;
+    }
+
+    public void touch(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
     public String getId() {
         return id;
     }
@@ -174,4 +184,3 @@ public class OrderEntity {
         return updatedAt;
     }
 }
-

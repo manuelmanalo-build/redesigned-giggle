@@ -14,6 +14,8 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.realtimetradeprocessing.simulator.api.ExecutionReportResponse;
 import com.realtimetradeprocessing.simulator.api.IdempotencyConflictException;
@@ -29,6 +31,8 @@ import com.realtimetradeprocessing.simulator.domain.OrderId;
 import com.realtimetradeprocessing.simulator.domain.OrderType;
 import com.realtimetradeprocessing.simulator.domain.Price;
 import com.realtimetradeprocessing.simulator.domain.Quantity;
+import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
+import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
 import com.realtimetradeprocessing.simulator.persistence.entity.IdempotencyRecordEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
@@ -45,6 +49,7 @@ public class OrderApplicationService {
     private final ExecutionReportJpaRepository executionReportRepository;
     private final TradeJpaRepository tradeRepository;
     private final IdempotencyRecordJpaRepository idempotencyRecordRepository;
+    private final OrderEventPublisher orderEventPublisher;
     private final Clock clock;
 
     @Autowired
@@ -52,9 +57,17 @@ public class OrderApplicationService {
         OrderJpaRepository orderRepository,
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
-        IdempotencyRecordJpaRepository idempotencyRecordRepository
+        IdempotencyRecordJpaRepository idempotencyRecordRepository,
+        OrderEventPublisher orderEventPublisher
     ) {
-        this(orderRepository, executionReportRepository, tradeRepository, idempotencyRecordRepository, Clock.systemUTC());
+        this(
+            orderRepository,
+            executionReportRepository,
+            tradeRepository,
+            idempotencyRecordRepository,
+            orderEventPublisher,
+            Clock.systemUTC()
+        );
     }
 
     OrderApplicationService(
@@ -62,23 +75,26 @@ public class OrderApplicationService {
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
+        OrderEventPublisher orderEventPublisher,
         Clock clock
     ) {
         this.orderRepository = orderRepository;
         this.executionReportRepository = executionReportRepository;
         this.tradeRepository = tradeRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
+        this.orderEventPublisher = orderEventPublisher;
         this.clock = clock;
     }
 
     @Transactional
-    public OrderSubmissionResult submitOrder(SubmitOrderRequest request, String idempotencyKey) {
+    public OrderSubmissionResult submitOrder(SubmitOrderRequest request, String idempotencyKey, String correlationId) {
         String normalizedIdempotencyKey = requireNonBlank(idempotencyKey, "Idempotency key must not be blank");
         String requestHash = fingerprint(request);
+        String resolvedCorrelationId = resolveCorrelationId(correlationId);
 
         return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
             .map(record -> replayOrConflict(record, requestHash))
-            .orElseGet(() -> createAcceptedOrder(request, normalizedIdempotencyKey, requestHash));
+            .orElseGet(() -> createAcceptedOrder(request, normalizedIdempotencyKey, requestHash, resolvedCorrelationId));
     }
 
     @Transactional(readOnly = true)
@@ -117,7 +133,12 @@ public class OrderApplicationService {
         return new OrderSubmissionResult(record.getResponseStatus(), response);
     }
 
-    private OrderSubmissionResult createAcceptedOrder(SubmitOrderRequest request, String idempotencyKey, String requestHash) {
+    private OrderSubmissionResult createAcceptedOrder(
+        SubmitOrderRequest request,
+        String idempotencyKey,
+        String requestHash,
+        String correlationId
+    ) {
         Instant now = clock.instant();
         Order order = toDomainOrder(request).accept();
         OrderEntity savedOrder = orderRepository.save(OrderEntity.fromDomain(order, normalizedClientOrderId(request), 0, now));
@@ -128,7 +149,38 @@ public class OrderApplicationService {
             CREATED,
             now
         ));
+        publishAfterCommit(toOrderSubmittedEvent(savedOrder, correlationId, now));
         return new OrderSubmissionResult(CREATED, OrderResponse.fromEntity(savedOrder));
+    }
+
+    private void publishAfterCommit(OrderSubmittedEvent event) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            orderEventPublisher.publishOrderSubmitted(event);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                orderEventPublisher.publishOrderSubmitted(event);
+            }
+        });
+    }
+
+    private OrderSubmittedEvent toOrderSubmittedEvent(OrderEntity order, String correlationId, Instant createdAt) {
+        return new OrderSubmittedEvent(
+            UUID.randomUUID().toString(),
+            order.getId(),
+            order.getClientOrderId(),
+            order.getAccountId(),
+            order.getSymbol(),
+            order.getSide(),
+            order.getType(),
+            order.getQuantity(),
+            order.getLimitPrice(),
+            correlationId,
+            createdAt
+        );
     }
 
     private Order toDomainOrder(SubmitOrderRequest request) {
@@ -177,6 +229,13 @@ public class OrderApplicationService {
             return "";
         }
         return price.stripTrailingZeros().toPlainString();
+    }
+
+    private static String resolveCorrelationId(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        return correlationId.trim();
     }
 
     private static String requireNonBlank(String value, String message) {

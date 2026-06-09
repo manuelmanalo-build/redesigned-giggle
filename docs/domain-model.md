@@ -195,14 +195,13 @@ Disallowed transitions:
 
 ## Execution Simulation Rules
 
-The MVP simulator should be deterministic for tests. Recommended initial rules:
+The MVP simulator is deterministic for tests. Current rules:
 
-- Reject orders for inactive accounts or instruments if they somehow reach processing.
-- For `MARKET` orders, fill the full quantity at a deterministic simulated price.
+- For `MARKET` orders, fill the full quantity at the configured simulated market price.
 - For `LIMIT BUY`, fill when simulated market price is less than or equal to limit price.
 - For `LIMIT SELL`, fill when simulated market price is greater than or equal to limit price.
-- If the limit condition is close but not fully met, optionally partial fill using a deterministic percentage.
-- If no fill is possible, reject or leave unfilled based on the chosen MVP rule. The recommended MVP behavior is `REJECTED` to keep the lifecycle simple.
+- If no fill is possible, leave the order `ACCEPTED`, write an `ACCEPTED` execution report with a no-fill message, and create no trade.
+- Partial fills, account activity checks, and instrument activity checks are planned extensions.
 
 ## Invariants
 

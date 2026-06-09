@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system will accept orders through REST, validate and persist them, publish order-submitted events to JMS, process those events asynchronously, simulate executions, create execution reports and trades, update order state, and expose query APIs.
 
-The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, and container-backed integration tests. JMS publication and asynchronous execution processing are intentionally still pending.
+The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, JMS order-submitted publication, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
 
 ## Project Summary
 
@@ -70,6 +70,8 @@ This starts:
 - PostgreSQL on `localhost:5432`.
 - ActiveMQ Artemis JMS broker on `localhost:61616`.
 - Artemis web console on `http://localhost:8161`.
+- Order submission events are published to the JMS queue `order.submitted`.
+- The local application consumes `order.submitted` by default and writes execution reports, trades, and order status updates.
 
 Default local credentials:
 
@@ -141,7 +143,7 @@ Expected workflow:
 
 ## Testing
 
-The current test suite includes domain unit tests, controller validation tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for persistence and REST API behavior. The intended strategy also includes JMS integration tests and end-to-end flow tests as those layers are implemented.
+The current test suite includes domain unit tests, execution simulator unit tests, controller validation tests, publisher unit tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for persistence, REST API behavior, and consumer-side execution processing. Broker-backed JMS tests remain a future hardening step.
 
 See [docs/testing-strategy.md](docs/testing-strategy.md).
 

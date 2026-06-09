@@ -43,3 +43,9 @@ logging:
   level:
     com.realtimetradeprocessing.simulator: INFO
 
+trade:
+  messaging:
+    order-submitted-queue: ${TRADE_ORDER_SUBMITTED_QUEUE:order.submitted}
+    jms-listener-enabled: ${TRADE_JMS_LISTENER_ENABLED:true}
+  execution:
+    simulated-market-price: ${TRADE_SIMULATED_MARKET_PRICE:100.00}

@@ -95,7 +95,7 @@ class OrderControllerTest {
             Instant.parse("2026-06-09T17:00:00Z"),
             Instant.parse("2026-06-09T17:00:00Z")
         );
-        when(orderApplicationService.submitOrder(any(), eq("idem-submit"))).thenReturn(new OrderSubmissionResult(201, response));
+        when(orderApplicationService.submitOrder(any(), eq("idem-submit"), any())).thenReturn(new OrderSubmissionResult(201, response));
 
         mockMvc.perform(post("/api/v1/orders")
                 .header("Idempotency-Key", "idem-submit")

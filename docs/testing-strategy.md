@@ -4,7 +4,7 @@
 
 The project should be built test-first where practical. Tests must prove the order submission, persistence, JMS processing, execution report, trade creation, idempotency, and error-handling behavior.
 
-The current test suite includes pure domain unit tests, Spring Boot startup smoke tests, and PostgreSQL-backed persistence integration tests. API, JMS, and end-to-end tests should be added as those layers are implemented.
+The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, JMS publisher unit tests, and PostgreSQL-backed persistence/API/consumer integration tests. Broker-backed JMS publish/consume tests should be added as a future hardening step.
 
 ## Test Commands
 
@@ -58,7 +58,7 @@ Tools:
 
 Cover REST behavior:
 
-- `POST /api/v1/orders` returns `202 Accepted` for valid requests.
+- `POST /api/v1/orders` returns `201 Created` for valid accepted requests.
 - Missing `Idempotency-Key` returns validation error.
 - Invalid enum values return `400 Bad Request`.
 - Invalid quantity or price returns field errors.
@@ -91,9 +91,11 @@ Tools:
 
 Run against embedded Artemis or an Artemis Testcontainer:
 
-- Order submission publishes `ORDER_SUBMITTED`.
-- Consumer receives an event and creates execution report and trade records.
-- Duplicate message delivery is idempotent.
+- `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
+- Current API integration tests verify the `OrderEventPublisher` seam without starting a broker.
+- Future broker-backed tests should verify that order submission publishes a readable message to Artemis.
+- Current consumer integration tests invoke `OrderSubmittedEventConsumer` directly against PostgreSQL.
+- Consumer tests verify market-order fills, marketable limit fills, non-marketable limit no-fills, missing-order safety, and duplicate delivery idempotency.
 - Retryable failures trigger redelivery behavior.
 - Poison-message or DLQ-ready behavior is documented and covered where practical.
 

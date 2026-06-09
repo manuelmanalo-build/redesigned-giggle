@@ -8,13 +8,15 @@ import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionRep
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
+import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 
 @SpringBootTest(properties = {
     "spring.autoconfigure.exclude="
         + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration,"
-        + "org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration"
+        + "org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
+    "trade.messaging.jms-listener-enabled=false"
 })
 class RealtimeTradeProcessingSimulatorApplicationTests {
 
@@ -29,6 +31,9 @@ class RealtimeTradeProcessingSimulatorApplicationTests {
 
     @MockBean
     private IdempotencyRecordJpaRepository idempotencyRecordRepository;
+
+    @MockBean
+    private OrderEventPublisher orderEventPublisher;
 
     @Test
     void contextLoads() {

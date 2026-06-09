@@ -4,7 +4,7 @@
 
 The intended architecture is a modular Spring Boot 3.x Java 21 service with synchronous REST APIs and asynchronous JMS processing. PostgreSQL is the source of truth. ActiveMQ Artemis provides local and test messaging. The architecture favors clear boundaries over microservice complexity.
 
-This document describes the target design, not completed implementation.
+This document describes the current MVP design and planned extensions.
 
 ## MVP Components
 
@@ -40,16 +40,17 @@ The exact package names may evolve, but framework concerns should not leak into 
 4. `SubmitOrderService` validates domain rules.
 5. The service checks or creates an `IdempotencyRecord`.
 6. Within a database transaction, the service stores the order and records the intended response.
-7. The service publishes an `ORDER_SUBMITTED` JMS message after the order is stored.
-8. The API returns `202 Accepted`.
-9. `OrderSubmittedConsumer` receives the message.
-10. The consumer checks message-consumption idempotency.
-11. The consumer loads and locks or conditionally updates the order.
-12. The execution simulator returns an execution outcome.
-13. The consumer writes an `ExecutionReport`.
-14. The consumer writes a `Trade` when quantity is filled.
-15. The consumer updates `OrderStatus`.
-16. Query APIs read current state and history from PostgreSQL.
+7. The service registers an after-commit publication of `OrderSubmittedEvent`.
+8. After the database transaction commits, `OrderEventPublisher` sends the event to the `order.submitted` JMS queue.
+9. The API returns `201 Created`.
+10. `OrderSubmittedEventConsumer` receives the message.
+11. The consumer checks message-consumption idempotency.
+12. The consumer loads and locks or conditionally updates the order.
+13. The execution simulator returns an execution outcome.
+14. The consumer writes an `ExecutionReport`.
+15. The consumer writes a `Trade` when quantity is filled.
+16. The consumer updates `OrderStatus`.
+17. Query APIs read current state and history from PostgreSQL.
 
 ## Transaction Boundaries
 
@@ -62,19 +63,33 @@ The submission transaction should:
 - Persist the response body or enough data to rebuild the response for duplicates.
 - Commit before the system exposes the order as accepted.
 
-Message publication should be designed to avoid lost messages. The preferred implementation path is a transactional outbox table or a clearly documented best-effort publisher for the MVP. If direct JMS publish is used initially, the tradeoff must be documented and tested around failure behavior.
+Current MVP behavior:
+
+- A valid order is persisted as `ACCEPTED`.
+- The order and idempotency record are committed in one database transaction.
+- `OrderSubmittedEvent` publication is registered with Spring transaction synchronization and runs after commit.
+- The application service depends on `OrderEventPublisher`, not `JmsTemplate`, so messaging can be tested and replaced independently.
+
+Tradeoff:
+
+- The MVP does not use a transactional outbox.
+- Publishing after commit avoids emitting events for rolled-back database work.
+- A process crash or broker outage after the database commit but before/during JMS send can leave an accepted order without a published event.
+- A production-grade design should add an outbox table and relay process so database state and event publication can be retried reliably.
 
 ### Message Consumption Transaction
 
-The consumer transaction should:
+The current consumer transaction:
 
-- Record message processing start or claim the message idempotency key.
-- Load the order with optimistic locking or guarded status transitions.
-- Create execution report and trade records.
-- Update order state.
-- Mark the message as processed.
+- Deserializes `OrderSubmittedEvent` outside the database transaction.
+- Loads the order with a pessimistic write lock.
+- Uses a deterministic execution-report ID derived from the event ID as the current message idempotency key.
+- Skips duplicate events that already produced an execution report.
+- Creates execution report and trade records when the simulated execution fills.
+- Leaves non-marketable limit orders in `ACCEPTED` status with a non-fill execution report and no trade.
+- Updates `orders.status`, `orders.filled_quantity`, and `orders.updated_at` atomically with the execution report/trade writes.
 
-If any step fails, the transaction should roll back so JMS redelivery can retry safely.
+If any database step fails, the transaction rolls back so JMS redelivery can retry safely.
 
 ## Idempotency Design
 
@@ -100,7 +115,9 @@ Each message must include:
 - `correlationId`
 - `occurredAt`
 
-The consumer must record processed message IDs. Duplicate message IDs must be acknowledged without repeating side effects.
+Current MVP behavior uses deterministic execution-report IDs derived from event IDs to make duplicate delivery safe. Duplicate event IDs are acknowledged without creating duplicate trades or duplicate terminal execution reports.
+
+A later production hardening step should add an explicit `processed_messages` inbox table so message claims, retry metadata, and DLQ diagnostics are queryable independently of execution-report IDs.
 
 ## Concurrency Model
 
@@ -110,7 +127,8 @@ Concurrency requirements:
 
 - Order submission idempotency must be protected with a unique database constraint.
 - Consumer processing must prevent duplicate execution for the same order.
-- Order updates should use optimistic locking or conditional SQL updates.
+- Current order execution processing uses a pessimistic row lock on `orders` plus deterministic report/trade IDs to handle duplicate delivery.
+- Later high-throughput versions can evaluate optimistic locking or conditional SQL updates.
 - Domain services should avoid mutable shared state.
 - Listener concurrency should be configurable.
 
@@ -153,22 +171,38 @@ Future query-oriented indexes should add `created_at` to support pagination and 
 
 Initial destination:
 
-- Queue: `orders.submitted.v1`
+- Queue: `order.submitted`
 
 Initial event:
 
-- `ORDER_SUBMITTED`
+- `OrderSubmittedEvent`
 
 Payload fields:
 
 - `eventId`
-- `messageId`
 - `orderId`
+- `clientOrderId`
 - `accountId`
-- `instrumentId`
+- `symbol`
+- `side`
+- `type`
+- `quantity`
+- `limitPrice`
 - `correlationId`
-- `occurredAt`
-- `schemaVersion`
+- `createdAt`
+
+Serialization:
+
+- `JmsOrderEventPublisher` serializes the event explicitly to a JSON text message with Jackson.
+- JMS message properties include `eventType`, `eventId`, `orderId`, and `correlationId`.
+- `JMSCorrelationID` is set from the request correlation ID.
+
+Current tests:
+
+- The JMS publisher is unit-tested with a mocked `JmsTemplate`.
+- REST integration tests mock `OrderEventPublisher` to verify accepted orders publish an event and invalid/conflicting submissions do not create duplicate publications.
+- Consumer integration tests currently invoke the consumer directly against PostgreSQL to verify market fills, limit fills, limit no-fills, duplicate delivery, and missing-order safety.
+- Broker-backed publish/consume tests are still deferred as a future hardening step.
 
 Retry and DLQ behavior:
 

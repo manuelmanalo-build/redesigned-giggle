@@ -31,9 +31,10 @@ public class OrderController {
     @PostMapping
     ResponseEntity<OrderResponse> submitOrder(
         @RequestHeader("Idempotency-Key") @NotBlank String idempotencyKey,
+        @RequestHeader(value = "X-Correlation-Id", required = false) String correlationId,
         @Valid @RequestBody SubmitOrderRequest request
     ) {
-        OrderSubmissionResult result = orderApplicationService.submitOrder(request, idempotencyKey);
+        OrderSubmissionResult result = orderApplicationService.submitOrder(request, idempotencyKey, correlationId);
         return ResponseEntity.status(result.responseStatus()).body(result.order());
     }
 

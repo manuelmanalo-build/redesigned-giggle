@@ -14,7 +14,7 @@ The MVP includes one Spring Boot service with:
 - PostgreSQL persistence for accounts, instruments, orders, execution reports, trades, and idempotency records.
 - JMS publishing and consuming with ActiveMQ Artemis.
 - Idempotent order submission using an `Idempotency-Key` header.
-- Idempotent message consumption using message IDs and processing records.
+- Idempotent message consumption using event IDs and deterministic execution-report/trade IDs.
 - A deterministic execution simulator that creates execution reports.
 - Trade creation when an order is `FILLED` or `PARTIALLY_FILLED`.
 - Order status updates based on execution outcome.
@@ -41,7 +41,7 @@ The MVP includes one Spring Boot service with:
 3. API creates or reuses an idempotency record for the request.
 4. API stores the order with status `ACCEPTED`.
 5. API publishes an `ORDER_SUBMITTED` event to a JMS queue.
-6. API returns `202 Accepted` with order identity and current state.
+6. API returns `201 Created` with order identity and current state.
 7. Async consumer receives the event.
 8. Consumer verifies the message has not already been processed.
 9. Consumer simulates execution.
@@ -63,7 +63,7 @@ The MVP domain includes:
 - `ExecutionReport`: result of simulated processing.
 - `ExecutionType`: execution event type.
 - `Trade`: fill record derived from an execution.
-- `IdempotencyRecord`: record used to deduplicate submissions and message processing.
+- `IdempotencyRecord`: record used to deduplicate REST submissions. A dedicated message inbox table is a planned extension.
 
 ## Functional Requirements
 
@@ -97,9 +97,8 @@ The MVP domain includes:
 The MVP is complete when a developer can:
 
 - Submit an order with an idempotency key.
-- Observe the order move from accepted to filled, partially filled, or rejected.
+- Observe the order move from accepted to filled, or remain accepted when a limit order does not cross the simulated market price.
 - Retrieve the order by ID.
 - Retrieve execution reports for the order.
 - Retrieve trades derived from the order.
 - Explain how REST, SQL, JMS, transactions, idempotency, concurrency, and tests work together.
-

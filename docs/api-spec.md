@@ -35,7 +35,7 @@ This document defines the REST API contract for the current MVP implementation a
 
 `POST /api/v1/orders`
 
-Validates, persists, and accepts an order. JMS publication is intentionally not implemented yet.
+Validates, persists, and accepts an order. After the database transaction commits, the service publishes `OrderSubmittedEvent` to the `order.submitted` JMS queue. The asynchronous consumer may later update the order to `FILLED`, create an execution report, and create a trade; non-marketable limit orders remain `ACCEPTED` with a no-fill execution report.
 
 Required header:
 
@@ -91,6 +91,8 @@ Idempotent replay:
 
 - Same `Idempotency-Key` and same normalized request fingerprint returns the original logical response and response status.
 - Same `Idempotency-Key` with a different request fingerprint returns `409 Conflict`.
+- Idempotent replay does not republish `OrderSubmittedEvent`.
+- Invalid or rejected requests do not publish `OrderSubmittedEvent`.
 
 ### Get Order
 
