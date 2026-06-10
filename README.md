@@ -12,7 +12,7 @@ This project is intended to demonstrate how to design and build a production-sha
 
 The MVP models:
 
-- Account and instrument reference data.
+- Account and instrument identifiers represented on orders and trades.
 - Idempotent order submission.
 - SQL-backed order persistence.
 - JMS-backed asynchronous processing.

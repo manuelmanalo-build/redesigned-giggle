@@ -12,6 +12,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -142,6 +149,38 @@ class OrderApiIntegrationTest {
     }
 
     @Test
+    void concurrentSubmissionsWithSameIdempotencyKeyReturnSameLogicalResponse() throws Exception {
+        clearInvocations(orderEventPublisher);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<MvcResult> task = () -> {
+            ready.countDown();
+            assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+            return submitOrder("idem-api-concurrent", validLimitOrderJson())
+                .andExpect(status().isCreated())
+                .andReturn();
+        };
+
+        try {
+            Future<MvcResult> firstFuture = executor.submit(task);
+            Future<MvcResult> secondFuture = executor.submit(task);
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            List<JsonNode> responses = List.of(
+                objectMapper.readTree(firstFuture.get(10, TimeUnit.SECONDS).getResponse().getContentAsString()),
+                objectMapper.readTree(secondFuture.get(10, TimeUnit.SECONDS).getResponse().getContentAsString())
+            );
+
+            assertThat(responses.get(1).get("orderId").asText()).isEqualTo(responses.get(0).get("orderId").asText());
+            verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void returnsConflictForSameIdempotencyKeyAndDifferentRequest() throws Exception {
         clearInvocations(orderEventPublisher);
 
@@ -181,6 +220,18 @@ class OrderApiIntegrationTest {
                 }
                 """)
             .andExpect(status().isBadRequest());
+
+        verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void rejectsOverlongIdempotencyKeyBeforePersistence() throws Exception {
+        clearInvocations(orderEventPublisher);
+        String overlongKey = "x".repeat(129);
+
+        submitOrder(overlongKey, validLimitOrderJson())
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
 
         verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }

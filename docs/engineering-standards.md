@@ -60,7 +60,7 @@ These standards guide implementation once code is added. They should keep the pr
 
 - REST submission idempotency is based on `Idempotency-Key` plus request fingerprint.
 - Message consumption idempotency is based on message ID.
-- Protect idempotency with unique database constraints.
+- Protect idempotency with unique database constraints and claim-first writes, not check-then-insert flows.
 - Replays must not create duplicate orders, execution reports, or trades.
 - Conflicting reuse of an idempotency key must return `409 Conflict`.
 

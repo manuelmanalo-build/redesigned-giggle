@@ -18,6 +18,7 @@ import com.realtimetradeprocessing.simulator.observability.CorrelationIdFilter;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 @Validated
 @RestController
@@ -32,7 +33,7 @@ public class OrderController {
 
     @PostMapping
     ResponseEntity<OrderResponse> submitOrder(
-        @RequestHeader("Idempotency-Key") @NotBlank String idempotencyKey,
+        @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 128) String idempotencyKey,
         @RequestAttribute(CorrelationIdFilter.REQUEST_ATTRIBUTE) String correlationId,
         @Valid @RequestBody SubmitOrderRequest request
     ) {

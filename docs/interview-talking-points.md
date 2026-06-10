@@ -34,7 +34,7 @@ The project is intentionally small, but it contains the backend topics interview
 
 - REST handlers process many client submissions concurrently.
 - JMS listener concurrency allows multiple orders to process in parallel.
-- Idempotency keys protect client retries.
+- Idempotency keys protect client retries, and PostgreSQL `ON CONFLICT DO NOTHING` claim inserts make concurrent first submissions deterministic.
 - Current duplicate delivery protection uses deterministic execution-report/trade IDs derived from the event ID.
 - The consumer locks the order row while it decides whether to create an execution report, create a trade, and update order state.
 - A production extension would add a dedicated processed-message inbox table for richer retry/DLQ diagnostics.
@@ -70,11 +70,12 @@ Start by identifying the specific endpoint or consumer path with high p99, then 
 - Account and instrument are currently persisted as explicit order/trade fields (`account_id`, `symbol`) to keep the first persistence step focused; separate reference-data tables remain a planned extension.
 - Foreign keys protect execution report, trade, and idempotency references to orders.
 - The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
-- Order submission stores the order and idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
+- Order submission claims the idempotency key, stores the order, and completes the idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
 - Order-submitted publication runs after transaction commit, so rolled-back orders are not emitted to JMS.
 - The request hash is based on normalized business fields, so superficial JSON formatting differences do not create false idempotency conflicts.
 - Numeric price columns use `NUMERIC(19, 4)` to avoid floating-point money errors.
 - Quantity columns use integer types with positive check constraints because order quantities are discrete in the MVP.
+- SQL constraints enforce enum values, market/limit price consistency, fill report quantity/price consistency, and valid idempotency response status ranges.
 - `orders.client_order_id` supports client/FIX-style lookup by `ClOrdID`.
 - `orders.account_id`, `orders.symbol`, and `orders.status` indexes support common query filters and operational screens.
 - `execution_reports.order_id` and `trades.order_id` indexes support order-lifecycle history reads.

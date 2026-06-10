@@ -232,6 +232,14 @@ Columns:
 - `filled_quantity`: non-negative cumulative filled quantity, constrained to be less than or equal to `quantity`.
 - `created_at`, `updated_at`: persistence timestamps.
 
+Database constraints also enforce:
+
+- `side` is `BUY` or `SELL`.
+- `type` is `MARKET` or `LIMIT`.
+- `status` is a known `OrderStatus`.
+- `MARKET` orders have no `limit_price`.
+- `LIMIT` orders have a positive `limit_price`.
+
 Indexes:
 
 - `idx_orders_client_order_id`
@@ -252,6 +260,13 @@ Columns:
 - `message`: optional rejection or lifecycle message.
 - `created_at`: report creation timestamp.
 
+Database constraints also enforce:
+
+- `execution_type` is a known `ExecutionType`.
+- `order_status` is a known `OrderStatus`.
+- `FILL` and `PARTIAL_FILL` reports include executed quantity and execution price.
+- Non-fill reports do not include executed quantity or execution price.
+
 Index:
 
 - `idx_execution_reports_order_id`
@@ -269,6 +284,8 @@ Columns:
 - `price`: positive execution price.
 - `created_at`: trade creation timestamp.
 
+Database constraints also enforce `side` as `BUY` or `SELL`.
+
 Index:
 
 - `idx_trades_order_id`
@@ -282,6 +299,8 @@ Columns:
 - `order_id`: nullable foreign key to `orders(id)`.
 - `response_status`: HTTP response status to replay for duplicate submissions.
 - `created_at`: record creation timestamp.
+
+Database constraints also enforce `response_status` in the valid HTTP status code range. REST submission claims use the `idempotency_key` primary key with PostgreSQL conflict handling so concurrent first submissions with the same key resolve to one stored order and one replayable response.
 
 Index:
 

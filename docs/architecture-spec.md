@@ -38,7 +38,7 @@ The exact package names may evolve, but framework concerns should not leak into 
 2. Correlation middleware resolves `X-Correlation-Id` or creates one.
 3. API validation checks JSON shape and simple constraints.
 4. `SubmitOrderService` validates domain rules.
-5. The service checks or creates an `IdempotencyRecord`.
+5. The service validates domain rules and claims an `IdempotencyRecord` with a PostgreSQL `ON CONFLICT DO NOTHING` insert.
 6. Within a database transaction, the service stores the order and records the intended response.
 7. The service registers an after-commit publication of `OrderSubmittedEvent`.
 8. After the database transaction commits, `OrderEventPublisher` sends the event to the `order.submitted` JMS queue.
@@ -67,6 +67,7 @@ Current MVP behavior:
 
 - A valid order is persisted as `ACCEPTED`.
 - The order and idempotency record are committed in one database transaction.
+- REST submission idempotency uses a database-backed claim: the first request inserts the idempotency key, and concurrent requests with the same key wait on PostgreSQL uniqueness before replaying or conflicting.
 - `OrderSubmittedEvent` publication is registered with Spring transaction synchronization and runs after commit.
 - The application service depends on `OrderEventPublisher`, not `JmsTemplate`, so messaging can be tested and replaced independently.
 
@@ -100,6 +101,7 @@ Clients must send `Idempotency-Key` for `POST /api/v1/orders`.
 Rules:
 
 - First use creates a record with request fingerprint and response reference.
+- Concurrent first use is guarded by the `idempotency_records` primary key and an `ON CONFLICT DO NOTHING` claim insert.
 - Repeated use with the same fingerprint returns the original logical response.
 - Repeated use with a different fingerprint returns `409 Conflict`.
 - Idempotency records should have a creation timestamp and final status.
@@ -152,7 +154,11 @@ Current constraints:
 - `orders.quantity` must be positive.
 - `orders.filled_quantity` must be non-negative and cannot exceed `orders.quantity`.
 - Price columns must be positive when present.
+- `orders.side`, `orders.type`, `orders.status`, `execution_reports.execution_type`, `execution_reports.order_status`, and `trades.side` are constrained to known enum values.
+- `orders.type` and `orders.limit_price` are constrained so market orders have no limit price and limit orders have a limit price.
+- Fill execution reports must include executed quantity and execution price; non-fill reports must not.
 - `idempotency_records.idempotency_key` is the primary key.
+- `idempotency_records.response_status` must be a valid HTTP status code range.
 - Foreign keys from execution reports, trades, and idempotency records protect references to orders.
 
 Current indexes:

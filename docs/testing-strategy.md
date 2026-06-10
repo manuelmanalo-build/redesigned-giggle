@@ -80,8 +80,9 @@ Run against PostgreSQL Testcontainers:
 
 - Core persistence tests currently verify save/find behavior for orders, execution reports, and trades.
 - Table constraints enforce unique idempotency keys.
+- Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
-- Optimistic locking or conditional updates prevent conflicting order updates.
+- Pessimistic row locking and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
 - Query filters and pagination work for orders, execution reports, and trades.
 - Index-backed query paths are documented where relevant.
 
@@ -125,7 +126,7 @@ Exercise the full flow:
 GitHub Actions should run:
 
 ```bash
-mvn clean verify
+./mvnw -B clean verify
 ```
 
 CI should verify:
@@ -142,7 +143,7 @@ CI should verify:
 The MVP should include focused concurrency tests rather than large load tests:
 
 - Concurrent submissions with the same idempotency key create one order.
-- Concurrent consumer attempts for the same message create one execution report and one trade.
+- Duplicate consumer attempts for the same message create one execution report and one trade.
 - Multiple consumer threads process different orders safely.
 
 Later performance work may add:

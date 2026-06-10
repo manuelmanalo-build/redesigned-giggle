@@ -187,6 +187,90 @@ class CorePersistenceIntegrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    @Test
+    void rejectsMarketOrderWithLimitPriceAtDatabaseLevel() {
+        Instant now = Instant.parse("2026-06-09T17:20:00Z");
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+            """
+                INSERT INTO orders (
+                    id, client_order_id, account_id, symbol, side, type, status,
+                    quantity, limit_price, filled_quantity, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "order-market-with-price",
+            "client-market-with-price",
+            "account-1",
+            "AAPL",
+            "BUY",
+            "MARKET",
+            "ACCEPTED",
+            100,
+            new BigDecimal("10.00"),
+            0,
+            Timestamp.from(now),
+            Timestamp.from(now)
+        ))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void rejectsLimitOrderWithoutLimitPriceAtDatabaseLevel() {
+        Instant now = Instant.parse("2026-06-09T17:21:00Z");
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+            """
+                INSERT INTO orders (
+                    id, client_order_id, account_id, symbol, side, type, status,
+                    quantity, limit_price, filled_quantity, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "order-limit-without-price",
+            "client-limit-without-price",
+            "account-1",
+            "AAPL",
+            "BUY",
+            "LIMIT",
+            "ACCEPTED",
+            100,
+            null,
+            0,
+            Timestamp.from(now),
+            Timestamp.from(now)
+        ))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void enforcesAllowedEnumValues() {
+        Instant now = Instant.parse("2026-06-09T17:25:00Z");
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+            """
+                INSERT INTO orders (
+                    id, client_order_id, account_id, symbol, side, type, status,
+                    quantity, limit_price, filled_quantity, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "order-invalid-side",
+            "client-invalid-side",
+            "account-1",
+            "AAPL",
+            "HOLD",
+            "MARKET",
+            "ACCEPTED",
+            100,
+            null,
+            0,
+            Timestamp.from(now),
+            Timestamp.from(now)
+        ))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
     private void saveAcceptedMarketOrder(String orderId, Instant now) {
         Order order = Order.market(
             OrderId.of(orderId),

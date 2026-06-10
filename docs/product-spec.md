@@ -11,7 +11,7 @@ The product is for interview preparation. It should be realistic enough to discu
 The MVP includes one Spring Boot service with:
 
 - REST APIs for order submission and read models.
-- PostgreSQL persistence for accounts, instruments, orders, execution reports, trades, and idempotency records.
+- PostgreSQL persistence for orders, execution reports, trades, and idempotency records. Account and instrument are represented as explicit order/trade fields in the MVP; dedicated reference-data tables are planned extensions.
 - JMS publishing and consuming with ActiveMQ Artemis.
 - Idempotent order submission using an `Idempotency-Key` header.
 - Idempotent message consumption using event IDs and deterministic execution-report/trade IDs.
@@ -25,7 +25,7 @@ The MVP includes one Spring Boot service with:
 ## Out of Scope for MVP
 
 - Real exchange connectivity.
-- Full FIX session management or FIX parsing.
+- Full FIX session management or production FIX engine behavior. The repository may include lightweight FIX-style parsing for education only.
 - Authentication and authorization.
 - Real market data.
 - Real matching engine or order book.

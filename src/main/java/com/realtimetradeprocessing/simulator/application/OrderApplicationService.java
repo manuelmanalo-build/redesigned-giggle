@@ -100,10 +100,17 @@ public class OrderApplicationService {
         String normalizedIdempotencyKey = requireNonBlank(idempotencyKey, "Idempotency key must not be blank");
         String requestHash = fingerprint(request);
         String resolvedCorrelationId = resolveCorrelationId(correlationId);
+        Order acceptedOrder = toDomainOrder(request).accept();
+        Instant now = clock.instant();
 
-        return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
-            .map(record -> replayOrConflict(record, requestHash))
-            .orElseGet(() -> createAcceptedOrder(request, normalizedIdempotencyKey, requestHash, resolvedCorrelationId));
+        int claimed = idempotencyRecordRepository.claimSubmission(normalizedIdempotencyKey, requestHash, CREATED, now);
+        if (claimed == 0) {
+            return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
+                .map(record -> replayOrConflict(record, requestHash))
+                .orElseThrow(() -> new IllegalStateException("Idempotency claim was not visible after conflict"));
+        }
+
+        return createAcceptedOrder(request, acceptedOrder, normalizedIdempotencyKey, resolvedCorrelationId, now);
     }
 
     @Transactional(readOnly = true)
@@ -145,20 +152,16 @@ public class OrderApplicationService {
 
     private OrderSubmissionResult createAcceptedOrder(
         SubmitOrderRequest request,
+        Order order,
         String idempotencyKey,
-        String requestHash,
-        String correlationId
+        String correlationId,
+        Instant now
     ) {
-        Instant now = clock.instant();
-        Order order = toDomainOrder(request).accept();
-        OrderEntity savedOrder = orderRepository.save(OrderEntity.fromDomain(order, normalizedClientOrderId(request), 0, now));
-        idempotencyRecordRepository.save(new IdempotencyRecordEntity(
-            idempotencyKey,
-            requestHash,
-            savedOrder.getId(),
-            CREATED,
-            now
-        ));
+        OrderEntity savedOrder = orderRepository.saveAndFlush(OrderEntity.fromDomain(order, normalizedClientOrderId(request), 0, now));
+        int completed = idempotencyRecordRepository.completeSubmission(idempotencyKey, savedOrder.getId(), CREATED);
+        if (completed != 1) {
+            throw new IllegalStateException("Failed to complete idempotency record: " + idempotencyKey);
+        }
         tradeMetrics.orderSubmitted();
         LOGGER.info(
             "order_submission_accepted orderId={} clientOrderId={} accountId={} symbol={} side={} type={}",
