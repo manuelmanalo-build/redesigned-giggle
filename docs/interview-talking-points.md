@@ -96,7 +96,7 @@ The project is intentionally small, but it contains the backend topics interview
 ## CI/CD
 
 - Maven provides repeatable local and CI builds.
-- GitHub Actions should run `mvn clean verify`.
+- GitHub Actions should run `./mvnw -B clean verify`.
 - CI should include unit tests, slice tests, PostgreSQL integration tests, and JMS integration tests.
 - A clean pipeline demonstrates that the project is not just a local demo.
 

@@ -259,4 +259,4 @@ CI runtime:
 - Maven.
 - JUnit 5.
 - Testcontainers for PostgreSQL and JMS integration tests.
-- GitHub Actions running `mvn clean verify`.
+- GitHub Actions running `./mvnw -B clean verify`.

@@ -56,8 +56,9 @@ This project is designed to demonstrate:
 Prerequisites:
 
 - Java 21.
-- Maven 3.9 or newer.
 - Docker and Docker Compose.
+
+The repository includes the Maven wrapper. On macOS/Linux/GitHub Actions use `./mvnw`; on Windows PowerShell use `.\mvnw.cmd`.
 
 Start local infrastructure:
 
@@ -84,7 +85,7 @@ Default local credentials:
 Run tests:
 
 ```bash
-mvn test
+./mvnw test
 ```
 
 On Windows with Docker Desktop, Testcontainers is configured to use `tcp://localhost:2375` and Docker API `1.40` during Maven test runs. Keep Docker Desktop's unauthenticated TCP option enabled for local Testcontainers tests.
@@ -92,13 +93,13 @@ On Windows with Docker Desktop, Testcontainers is configured to use `tcp://local
 Run the full build:
 
 ```bash
-mvn clean verify
+./mvnw clean verify
 ```
 
 Start the application locally after Docker Compose is running:
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 Health endpoint:
@@ -125,6 +126,30 @@ If Java and Maven were installed project-locally under `.toolchain`, load them i
 
 ```powershell
 .\scripts\dev-env.ps1
+```
+
+## Command List
+
+Local commands:
+
+```bash
+docker compose up -d
+./mvnw test
+./mvnw clean verify
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+docker build -t realtime-trade-processing-simulator:local .
+docker compose down
+```
+
+Windows PowerShell equivalents use `.\mvnw.cmd` instead of `./mvnw`.
+
+CI commands:
+
+```bash
+./mvnw -v
+./mvnw -B -DskipTests compile
+./mvnw -B clean verify
+docker build --tag realtime-trade-processing-simulator:ci .
 ```
 
 ## Architecture

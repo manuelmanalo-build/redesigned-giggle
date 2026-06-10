@@ -8,14 +8,14 @@ The current test suite includes pure domain unit tests, execution simulator unit
 
 ## Test Commands
 
-Expected commands once Maven exists:
+Expected commands:
 
 ```bash
-mvn test
-mvn verify
+./mvnw test
+./mvnw verify
 ```
 
-`mvn verify` should run integration tests that need Testcontainers.
+`./mvnw verify` should run integration tests that need Testcontainers.
 
 On Windows with Docker Desktop, the Maven build configures Surefire to use `DOCKER_HOST=tcp://localhost:2375` and docker-java `api.version=1.40`. Docker Desktop's unauthenticated TCP endpoint must be enabled locally for the PostgreSQL Testcontainers tests.
 

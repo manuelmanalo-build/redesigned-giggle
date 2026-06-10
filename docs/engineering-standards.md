@@ -84,6 +84,19 @@ These standards guide implementation once code is added. They should keep the pr
 - Avoid arbitrary sleeps in asynchronous tests; use polling with timeouts.
 - Add tests for error paths, retries, idempotency, and concurrent processing.
 
+## Quality Gates
+
+Local and CI quality gates should stay aligned:
+
+- Java version: CI must run Java 21.
+- Dependency resolution: use the Maven wrapper rather than relying on runner-local Maven.
+- Compile/static check: run `./mvnw -B -DskipTests compile`.
+- Unit and integration tests: run `./mvnw -B clean verify`.
+- Testcontainers: integration tests must run against real PostgreSQL containers in CI.
+- Packaging: `clean verify` must produce the Spring Boot jar.
+- Container build: CI should build the Docker image with `docker build --tag realtime-trade-processing-simulator:ci .`.
+- Formatting/static analysis plugins should be added to the Maven build before they become required CI gates.
+
 ## Documentation Standards
 
 - Update specs when APIs, data flow, domain rules, schemas, message payloads, or operational assumptions change.

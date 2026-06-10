@@ -35,13 +35,24 @@ The project should remain understandable, explainable, and reviewable. Favor cle
 Run the full build with:
 
 ```bash
-mvn clean verify
+./mvnw clean verify
 ```
 
 For faster local feedback:
 
 ```bash
-mvn test
+./mvnw test
+```
+
+## CI Commands
+
+GitHub Actions should run:
+
+```bash
+./mvnw -v
+./mvnw -B -DskipTests compile
+./mvnw -B clean verify
+docker build --tag realtime-trade-processing-simulator:ci .
 ```
 
 ## Test Commands
@@ -49,11 +60,11 @@ mvn test
 Run tests with:
 
 ```bash
-mvn test
-mvn verify
+./mvnw test
+./mvnw verify
 ```
 
-The current suite includes domain unit tests, startup smoke tests, and PostgreSQL Testcontainers integration tests. Ensure Docker is running before `mvn verify`.
+The current suite includes domain unit tests, startup smoke tests, and PostgreSQL Testcontainers integration tests. Ensure Docker is running before `./mvnw verify`.
 
 The persistence test suite uses PostgreSQL Testcontainers. On Windows with Docker Desktop, Maven activates a Windows-only Surefire profile that expects Docker Desktop's TCP endpoint on `tcp://localhost:2375` and pins docker-java to API version `1.40`.
 
@@ -68,7 +79,7 @@ docker compose up -d
 Run the application:
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 ## Branch and PR Expectations
