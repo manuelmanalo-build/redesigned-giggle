@@ -2,6 +2,7 @@ package com.realtimetradeprocessing.simulator.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -34,6 +35,8 @@ import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 @SpringBootTest(properties = {
     "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
@@ -76,6 +79,9 @@ class OrderSubmittedEventConsumerIntegrationTest {
 
     @Autowired
     private TradeJpaRepository tradeRepository;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @MockBean
     private OrderEventPublisher orderEventPublisher;
@@ -174,6 +180,16 @@ class OrderSubmittedEventConsumerIntegrationTest {
         assertThatCode(() -> consumer.receive(objectMapper.writeValueAsString(event))).doesNotThrowAnyException();
         assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc("missing-order")).isEmpty();
         assertThat(tradeRepository.findByOrderIdOrderByCreatedAtAsc("missing-order")).isEmpty();
+    }
+
+    @Test
+    void invalidMessageIncrementsProcessingFailureMetric() {
+        double before = meterRegistry.counter("trade.messages.processing.failures").count();
+
+        assertThatThrownBy(() -> consumer.receive("{not-json"))
+            .isInstanceOf(MessageConsumptionException.class);
+
+        assertThat(meterRegistry.counter("trade.messages.processing.failures").count()).isEqualTo(before + 1.0);
     }
 
     private OrderSubmittedEvent submitAndCaptureEvent(String idempotencyKey, String requestBody) throws Exception {

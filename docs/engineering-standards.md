@@ -49,8 +49,8 @@ These standards guide implementation once code is added. They should keep the pr
 
 - Use Spring JMS with ActiveMQ Artemis.
 - Use durable queues for order processing.
-- Initial destination: `orders.submitted.v1`.
-- Include `messageId`, `eventId`, `eventType`, `orderId`, `correlationId`, and `schemaVersion` in event payloads.
+- Initial destination: `order.submitted`.
+- Include `eventId`, `orderId`, client order/account/symbol fields, order terms, `correlationId`, and creation time in event payloads.
 - Make consumers idempotent.
 - Throw on retryable failures so broker redelivery can occur.
 - Make DLQ behavior documented and configurable.
@@ -72,6 +72,8 @@ These standards guide implementation once code is added. They should keep the pr
 - Log state transitions at info level.
 - Log unexpected failures with stack traces server-side only.
 - Do not log sensitive account data beyond stable identifiers needed for debugging.
+- Expose operational health and metrics through Spring Boot Actuator.
+- Keep custom metric names stable and documented when behavior changes.
 
 ## Testing Standards
 
@@ -95,4 +97,3 @@ These standards guide implementation once code is added. They should keep the pr
 - Include docs updates when behavior changes.
 - Avoid unrelated refactors.
 - Do not introduce major frameworks, dependencies, or architecture shifts without updating specs first.
-

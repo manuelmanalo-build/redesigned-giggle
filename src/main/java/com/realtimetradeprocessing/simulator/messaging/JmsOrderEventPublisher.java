@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,6 +17,8 @@ import jakarta.jms.TextMessage;
 @Primary
 @ConditionalOnBean(JmsTemplate.class)
 public class JmsOrderEventPublisher implements OrderEventPublisher {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(JmsOrderEventPublisher.class);
 
     public static final String EVENT_TYPE = "OrderSubmittedEvent";
 
@@ -44,6 +48,13 @@ public class JmsOrderEventPublisher implements OrderEventPublisher {
             message.setJMSCorrelationID(event.correlationId());
             return message;
         });
+        LOGGER.info(
+            "order_submitted_event_published destination={} eventId={} orderId={} correlationId={}",
+            destinationName,
+            event.eventId(),
+            event.orderId(),
+            event.correlationId()
+        );
     }
 
     private String serialize(OrderSubmittedEvent event) {

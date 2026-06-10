@@ -9,6 +9,9 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.realtimetradeprocessing.simulator.application.OrderExecutionProcessor;
+import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
+
+import io.micrometer.core.instrument.Timer;
 
 @Component
 public class OrderSubmittedEventConsumer {
@@ -17,22 +20,37 @@ public class OrderSubmittedEventConsumer {
 
     private final ObjectMapper objectMapper;
     private final OrderExecutionProcessor orderExecutionProcessor;
+    private final TradeMetrics tradeMetrics;
 
-    public OrderSubmittedEventConsumer(ObjectMapper objectMapper, OrderExecutionProcessor orderExecutionProcessor) {
+    public OrderSubmittedEventConsumer(
+        ObjectMapper objectMapper,
+        OrderExecutionProcessor orderExecutionProcessor,
+        TradeMetrics tradeMetrics
+    ) {
         this.objectMapper = objectMapper;
         this.orderExecutionProcessor = orderExecutionProcessor;
+        this.tradeMetrics = tradeMetrics;
     }
 
     @JmsListener(destination = "${trade.messaging.order-submitted-queue:order.submitted}")
     public void receive(String payload) {
-        OrderSubmittedEvent event = deserialize(payload);
-        if (event.correlationId() == null || event.correlationId().isBlank()) {
-            process(event);
-            return;
-        }
+        Timer.Sample sample = tradeMetrics.startMessageProcessing();
+        try {
+            OrderSubmittedEvent event = deserialize(payload);
+            if (event.correlationId() == null || event.correlationId().isBlank()) {
+                process(event);
+                return;
+            }
 
-        try (MDC.MDCCloseable ignored = MDC.putCloseable("correlationId", event.correlationId())) {
-            process(event);
+            try (MDC.MDCCloseable ignored = MDC.putCloseable("correlationId", event.correlationId())) {
+                process(event);
+            }
+        } catch (RuntimeException exception) {
+            tradeMetrics.messageProcessingFailed();
+            LOGGER.error("Failed to process order submitted message", exception);
+            throw exception;
+        } finally {
+            tradeMetrics.stopMessageProcessing(sample);
         }
     }
 

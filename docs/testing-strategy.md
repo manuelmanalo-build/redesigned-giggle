@@ -65,6 +65,9 @@ Cover REST behavior:
 - Idempotency conflict returns `409 Conflict`.
 - `GET` endpoints return `200 OK` or `404 Not Found`.
 - Error responses include `correlationId`.
+- REST responses include an `X-Correlation-Id` response header.
+- Global exception handling covers validation, domain exceptions, idempotency conflicts, and not-found responses.
+- `/actuator/health` and custom Micrometer metrics are accessible in integration tests.
 
 Tools:
 

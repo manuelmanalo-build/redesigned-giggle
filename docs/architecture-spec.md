@@ -210,6 +210,30 @@ Retry and DLQ behavior:
 - Poison-message behavior should be DLQ-ready even if the first version only documents broker defaults.
 - Non-retryable domain failures should create a rejected execution report and update order state.
 
+## Observability and Operations
+
+REST correlation behavior:
+
+- `CorrelationIdFilter` resolves `X-Correlation-Id` or generates a UUID.
+- The correlation ID is written to SLF4J MDC, returned as the `X-Correlation-Id` response header, included in error responses, and passed into `OrderSubmittedEvent`.
+- JMS consumers restore the event correlation ID into MDC while processing.
+
+Current custom Micrometer meters:
+
+- `trade.orders.submitted`
+- `trade.orders.rejected`
+- `trade.execution_reports.created`
+- `trade.trades.created`
+- `trade.messages.processing.failures`
+- `trade.messages.processing.duration`
+
+Operational endpoints:
+
+- `/actuator/health`: application health with database and broker contributors when configured.
+- `/actuator/info`: application info.
+- `/actuator/metrics`: available metrics.
+- `/actuator/metrics/{name}`: individual metric samples.
+
 ## Error Handling
 
 API errors should use a consistent JSON structure and avoid leaking implementation details.

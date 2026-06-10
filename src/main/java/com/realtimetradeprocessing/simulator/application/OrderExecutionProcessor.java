@@ -24,6 +24,7 @@ import com.realtimetradeprocessing.simulator.domain.Quantity;
 import com.realtimetradeprocessing.simulator.domain.Trade;
 import com.realtimetradeprocessing.simulator.domain.TradeId;
 import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
+import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
@@ -40,6 +41,7 @@ public class OrderExecutionProcessor {
     private final ExecutionReportJpaRepository executionReportRepository;
     private final TradeJpaRepository tradeRepository;
     private final ExecutionSimulator executionSimulator;
+    private final TradeMetrics tradeMetrics;
     private final Clock clock;
 
     @Autowired
@@ -47,9 +49,10 @@ public class OrderExecutionProcessor {
         OrderJpaRepository orderRepository,
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
-        ExecutionSimulator executionSimulator
+        ExecutionSimulator executionSimulator,
+        TradeMetrics tradeMetrics
     ) {
-        this(orderRepository, executionReportRepository, tradeRepository, executionSimulator, Clock.systemUTC());
+        this(orderRepository, executionReportRepository, tradeRepository, executionSimulator, tradeMetrics, Clock.systemUTC());
     }
 
     OrderExecutionProcessor(
@@ -57,12 +60,14 @@ public class OrderExecutionProcessor {
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
         ExecutionSimulator executionSimulator,
+        TradeMetrics tradeMetrics,
         Clock clock
     ) {
         this.orderRepository = orderRepository;
         this.executionReportRepository = executionReportRepository;
         this.tradeRepository = tradeRepository;
         this.executionSimulator = executionSimulator;
+        this.tradeMetrics = tradeMetrics;
         this.clock = clock;
     }
 
@@ -119,6 +124,7 @@ public class OrderExecutionProcessor {
             Price.of(simulation.executionPrice())
         );
         executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
+        tradeMetrics.executionReportCreated();
 
         Trade trade = Trade.fromExecutionReport(
             TradeId.of(deterministicId("trade", executionReportId)),
@@ -128,6 +134,7 @@ public class OrderExecutionProcessor {
             report
         );
         tradeRepository.save(TradeEntity.fromDomain(trade, now));
+        tradeMetrics.tradeCreated();
         order.markFilled(simulation.executedQuantity(), now);
     }
 
@@ -142,6 +149,7 @@ public class OrderExecutionProcessor {
             Optional.of("No fill at simulated market price")
         );
         executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
+        tradeMetrics.executionReportCreated();
         order.touch(now);
     }
 

@@ -226,6 +226,22 @@ class OrderApiIntegrationTest {
             .andExpect(jsonPath("$[0].price").value(185.5000));
     }
 
+    @Test
+    void exposesHealthAndCustomMetrics() throws Exception {
+        clearInvocations(orderEventPublisher);
+
+        submitOrder("idem-api-metrics", validLimitOrderJson())
+            .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/actuator/health"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("UP"));
+
+        mockMvc.perform(get("/actuator/metrics/trade.orders.submitted"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.name").value("trade.orders.submitted"));
+    }
+
     private org.springframework.test.web.servlet.ResultActions submitOrder(String idempotencyKey, String body) throws Exception {
         return mockMvc.perform(post("/api/v1/orders")
             .header("Idempotency-Key", idempotencyKey)

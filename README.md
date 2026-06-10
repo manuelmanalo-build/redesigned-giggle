@@ -107,6 +107,20 @@ Health endpoint:
 curl http://localhost:8080/actuator/health
 ```
 
+Useful operational endpoints:
+
+- `GET /actuator/health`: application, database, and broker health where the corresponding components are configured.
+- `GET /actuator/info`: application info endpoint.
+- `GET /actuator/metrics`: available Micrometer meter names.
+- `GET /actuator/metrics/trade.orders.submitted`
+- `GET /actuator/metrics/trade.orders.rejected`
+- `GET /actuator/metrics/trade.execution_reports.created`
+- `GET /actuator/metrics/trade.trades.created`
+- `GET /actuator/metrics/trade.messages.processing.failures`
+- `GET /actuator/metrics/trade.messages.processing.duration`
+
+REST responses include an `X-Correlation-Id` response header. If the client does not provide one, the application generates one and uses it in logs and order-submitted events.
+
 If Java and Maven were installed project-locally under `.toolchain`, load them in the current PowerShell session with:
 
 ```powershell

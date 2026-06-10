@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +35,7 @@ import com.realtimetradeprocessing.simulator.domain.Price;
 import com.realtimetradeprocessing.simulator.domain.Quantity;
 import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
+import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
 import com.realtimetradeprocessing.simulator.persistence.entity.IdempotencyRecordEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
@@ -43,6 +46,7 @@ import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepo
 @Service
 public class OrderApplicationService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(OrderApplicationService.class);
     private static final int CREATED = 201;
 
     private final OrderJpaRepository orderRepository;
@@ -50,6 +54,7 @@ public class OrderApplicationService {
     private final TradeJpaRepository tradeRepository;
     private final IdempotencyRecordJpaRepository idempotencyRecordRepository;
     private final OrderEventPublisher orderEventPublisher;
+    private final TradeMetrics tradeMetrics;
     private final Clock clock;
 
     @Autowired
@@ -58,7 +63,8 @@ public class OrderApplicationService {
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
-        OrderEventPublisher orderEventPublisher
+        OrderEventPublisher orderEventPublisher,
+        TradeMetrics tradeMetrics
     ) {
         this(
             orderRepository,
@@ -66,6 +72,7 @@ public class OrderApplicationService {
             tradeRepository,
             idempotencyRecordRepository,
             orderEventPublisher,
+            tradeMetrics,
             Clock.systemUTC()
         );
     }
@@ -76,6 +83,7 @@ public class OrderApplicationService {
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
         OrderEventPublisher orderEventPublisher,
+        TradeMetrics tradeMetrics,
         Clock clock
     ) {
         this.orderRepository = orderRepository;
@@ -83,6 +91,7 @@ public class OrderApplicationService {
         this.tradeRepository = tradeRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
         this.orderEventPublisher = orderEventPublisher;
+        this.tradeMetrics = tradeMetrics;
         this.clock = clock;
     }
 
@@ -124,6 +133,7 @@ public class OrderApplicationService {
 
     private OrderSubmissionResult replayOrConflict(IdempotencyRecordEntity record, String requestHash) {
         if (!record.getRequestHash().equals(requestHash)) {
+            LOGGER.warn("idempotency_conflict idempotencyKey={}", record.getIdempotencyKey());
             throw new IdempotencyConflictException("Idempotency key was already used with a different request");
         }
         String orderId = record.getOrderId();
@@ -149,6 +159,16 @@ public class OrderApplicationService {
             CREATED,
             now
         ));
+        tradeMetrics.orderSubmitted();
+        LOGGER.info(
+            "order_submission_accepted orderId={} clientOrderId={} accountId={} symbol={} side={} type={}",
+            savedOrder.getId(),
+            savedOrder.getClientOrderId(),
+            savedOrder.getAccountId(),
+            savedOrder.getSymbol(),
+            savedOrder.getSide(),
+            savedOrder.getType()
+        );
         publishAfterCommit(toOrderSubmittedEvent(savedOrder, correlationId, now));
         return new OrderSubmissionResult(CREATED, OrderResponse.fromEntity(savedOrder));
     }
