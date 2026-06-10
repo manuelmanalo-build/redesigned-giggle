@@ -47,6 +47,11 @@ The project is intentionally small, but it contains the backend topics interview
 - `BigDecimal` correctness is worth the allocation cost for money-like values.
 - JVM profiling should focus on real bottlenecks before optimization.
 - GC discussions can cover object churn, batching, backpressure, and avoiding unnecessary temporary objects.
+- For local demos, GC logs can be enabled with G1GC and bounded heap settings to inspect allocation pressure and pause behavior.
+
+Concise high-latency investigation answer:
+
+Start by identifying the specific endpoint or consumer path with high p99, then correlate the spike with application logs, Micrometer timers, GC pause metrics, CPU, thread count, Hikari pool wait time, PostgreSQL slow queries/locks, and Artemis queue depth/redeliveries. If GC pauses or allocation rate line up with the spike, inspect heap pressure, object churn, and thread dumps. If app threads are waiting on JDBC or the broker while GC is quiet, treat it as a database, broker, or queueing problem. Change one variable at a time and validate with a repeatable load shape.
 
 ## REST
 
@@ -121,17 +126,21 @@ The MVP runs locally, but it can be mapped to AWS concepts:
 
 ## FIX and Trade Lifecycle
 
-The project does not implement FIX, but it maps naturally to FIX vocabulary:
+The project includes a deliberately lightweight FIX-style parser for educational use. It accepts simplified `tag=value` messages separated by SOH or `|`, supports a small New Order Single-like field set, and maps `35=D` messages into the same internal order request model used by the REST API.
+
+This is not a full FIX engine. It does not implement logon/logout, heartbeats, sequence recovery, resend requests, gap fills, BodyLength/CheckSum validation, counterparty sessions, or FIX dictionary certification behavior. A production integration would use a proven engine such as QuickFIX/J and keep business mapping separate from session management.
 
 - `ClOrdID` maps to `clientOrderId`.
-- `Account` maps to `accountId`.
+- In this simplified demo, `SenderCompID` maps to `accountId`.
 - `Symbol` maps to `symbol`.
-- `Side` maps to `OrderSide`.
-- `OrdType` maps to `OrderType`.
+- `Side=1` maps to `OrderSide.BUY`; `Side=2` maps to `OrderSide.SELL`.
+- `OrdType=1` maps to `OrderType.MARKET`; `OrdType=2` maps to `OrderType.LIMIT`.
 - `OrderQty` maps to `quantity`.
-- `Price` maps to `limitPrice`.
+- `Price` maps to `limitPrice` for limit orders and is ignored for market orders because the domain model rejects prices on market orders.
 - `OrdStatus` maps to `OrderStatus`.
 - `ExecType` maps to `ExecutionType`.
 - `ExecID` maps to `executionReportId`.
+
+The parser and mapper are isolated from controllers, persistence, and JMS. That keeps the protocol translation testable and makes the boundary between transport/protocol concerns and domain/application behavior easy to explain.
 
 The order lifecycle demonstrates accepted, rejected, partially filled, and filled states without requiring real market connectivity.

@@ -49,6 +49,7 @@ This project is designed to demonstrate:
 - [Domain Model](docs/domain-model.md)
 - [Testing Strategy](docs/testing-strategy.md)
 - [Engineering Standards](docs/engineering-standards.md)
+- [JVM and GC Performance Notes](docs/jvm-gc-performance-notes.md)
 - [Interview Talking Points](docs/interview-talking-points.md)
 
 ## Local Setup
@@ -137,6 +138,8 @@ docker compose up -d
 ./mvnw test
 ./mvnw clean verify
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+./scripts/run-local-with-gc-logs.sh
+./scripts/run-load-demo.sh
 docker build -t realtime-trade-processing-simulator:local .
 docker compose down
 ```
@@ -168,6 +171,15 @@ Current package roots:
 - `persistence`
 
 See [docs/architecture-spec.md](docs/architecture-spec.md).
+
+## JVM and GC Notes
+
+For local JVM/GC observation, see [docs/jvm-gc-performance-notes.md](docs/jvm-gc-performance-notes.md).
+
+Optional helper scripts:
+
+- `./scripts/run-local-with-gc-logs.sh`: starts the packaged app with local demo heap settings, G1GC, and rotating GC logs under `logs/gc`.
+- `./scripts/run-load-demo.sh`: sends a small configurable burst of order submissions to a running local app. This is a smoke/load demo, not a benchmark.
 
 ## Development Workflow
 
