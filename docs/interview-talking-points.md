@@ -120,12 +120,19 @@ Start by identifying the specific endpoint or consumer path with high p99, then 
 
 The MVP runs locally, but it can be mapped to AWS concepts:
 
-- Spring Boot service on ECS, EKS, or Elastic Beanstalk.
-- PostgreSQL on Amazon RDS.
-- JMS-like asynchronous processing with Amazon MQ for ActiveMQ or SQS with design adjustments.
-- CloudWatch logs and metrics for observability.
-- Secrets Manager or Parameter Store for configuration.
-- Horizontal scaling of API tasks and consumer tasks.
+- The simplest production-shaped deployment is the Spring Boot container on ECS Fargate behind an ALB, with PostgreSQL on RDS and JMS-compatible messaging on Amazon MQ.
+- EKS is useful if the company already runs Kubernetes, but it adds cluster and platform complexity; EC2 gives host-level control but creates the most operational burden.
+- SQS/SNS is the AWS-native alternative to JMS and is easier to operate, but the app needs different acknowledgement, visibility-timeout, ordering, and deduplication semantics.
+- MSK/Kafka fits event streaming, replay, and multiple downstream consumers, but it is heavier than a queue for this MVP.
+- CloudWatch should collect structured logs with correlation IDs plus API latency, JVM metrics, Hikari pool pressure, RDS health, broker queue depth, redeliveries, and DLQ counts.
+- IAM task roles, Secrets Manager, and KMS keep credentials and encryption concerns out of the application image.
+- Rolling deployments are a good default; blue/green is safer when release risk is higher, especially with backward-compatible database migrations.
+- Autoscaling should use API request/latency signals for REST tasks and queue depth/message age for consumers, while checking RDS and broker saturation before adding workers.
+- Key failure modes are RDS outages, broker outages, duplicate or poison messages, connection pool exhaustion, bad deployments, and the MVP's known lack of a transactional outbox.
+
+Concise AWS deployment answer:
+
+I would containerize the Spring Boot service and run it on ECS Fargate behind an ALB, use RDS PostgreSQL as the source of truth, and use Amazon MQ if I want to preserve JMS semantics. I would put credentials in Secrets Manager, encrypt data and secrets with KMS, use IAM task roles, publish structured logs and Micrometer metrics to CloudWatch, and autoscale API tasks on request/latency signals and consumers on queue depth or message age. For a production version, I would add a transactional outbox and explicit processed-message inbox before relying on the async flow under broker failures.
 
 ## FIX and Trade Lifecycle
 
