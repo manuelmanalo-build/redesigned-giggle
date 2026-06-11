@@ -277,6 +277,7 @@ Columns:
 
 - `id`: primary key, maps to `TradeId`.
 - `order_id`: non-null foreign key to `orders(id)`.
+- `execution_report_id`: non-null foreign key to `execution_reports(id)`, unique so one execution report creates at most one trade.
 - `account_id`
 - `symbol`
 - `side`
@@ -286,9 +287,10 @@ Columns:
 
 Database constraints also enforce `side` as `BUY` or `SELL`.
 
-Index:
+Indexes:
 
 - `idx_trades_order_id`
+- `idx_trades_execution_report_id`
 
 ### `idempotency_records`
 

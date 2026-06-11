@@ -160,6 +160,7 @@ Current constraints:
 - `idempotency_records.idempotency_key` is the primary key.
 - `idempotency_records.response_status` must be a valid HTTP status code range.
 - Foreign keys from execution reports, trades, and idempotency records protect references to orders.
+- Each trade references the execution report that created it, and `trades.execution_report_id` is unique so duplicate fill reports cannot create duplicate trades for the same report.
 
 Current indexes:
 
@@ -169,6 +170,7 @@ Current indexes:
 - `orders(status)`
 - `execution_reports(order_id)`
 - `trades(order_id)`
+- `trades(execution_report_id)`
 - `idempotency_records(idempotency_key)`
 
 Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once list endpoints exist.
@@ -208,11 +210,12 @@ Current tests:
 - The JMS publisher is unit-tested with a mocked `JmsTemplate`.
 - REST integration tests mock `OrderEventPublisher` to verify accepted orders publish an event and invalid/conflicting submissions do not create duplicate publications.
 - Consumer integration tests currently invoke the consumer directly against PostgreSQL to verify market fills, limit fills, limit no-fills, duplicate delivery, and missing-order safety.
-- Broker-backed publish/consume tests are still deferred as a future hardening step.
+- A broker-backed Artemis Testcontainers integration test verifies that REST submission publishes a real JMS message and the asynchronous listener consumes it into an execution report, trade, and filled order state.
 
 Retry and DLQ behavior:
 
 - The consumer must throw on retryable failures so the broker can redeliver.
+- JMS listener sessions are transacted in the MVP so a processing exception rolls back message acknowledgement and allows broker redelivery.
 - Poison-message behavior should be DLQ-ready even if the first version only documents broker defaults.
 - Non-retryable domain failures should create a rejected execution report and update order state.
 

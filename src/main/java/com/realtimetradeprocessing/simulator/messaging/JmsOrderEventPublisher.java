@@ -1,7 +1,7 @@
 package com.realtimetradeprocessing.simulator.messaging;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -15,7 +15,7 @@ import jakarta.jms.TextMessage;
 
 @Component
 @Primary
-@ConditionalOnBean(JmsTemplate.class)
+@ConditionalOnProperty(name = "trade.messaging.jms-publisher-enabled", havingValue = "true", matchIfMissing = true)
 public class JmsOrderEventPublisher implements OrderEventPublisher {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JmsOrderEventPublisher.class);

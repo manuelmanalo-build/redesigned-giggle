@@ -31,6 +31,9 @@ public class TradeEntity {
     @Column(name = "order_id", nullable = false, length = 64)
     private String orderId;
 
+    @Column(name = "execution_report_id", nullable = false, length = 64)
+    private String executionReportId;
+
     @Column(name = "account_id", nullable = false, length = 128)
     private String accountId;
 
@@ -56,6 +59,7 @@ public class TradeEntity {
     public TradeEntity(
         String id,
         String orderId,
+        String executionReportId,
         String accountId,
         String symbol,
         OrderSide side,
@@ -65,6 +69,7 @@ public class TradeEntity {
     ) {
         this.id = id;
         this.orderId = orderId;
+        this.executionReportId = executionReportId;
         this.accountId = accountId;
         this.symbol = symbol;
         this.side = side;
@@ -77,6 +82,7 @@ public class TradeEntity {
         return new TradeEntity(
             trade.tradeId().value(),
             trade.orderId().value(),
+            trade.executionReportId().value(),
             trade.accountId().value(),
             trade.symbol().value(),
             trade.side(),
@@ -86,11 +92,11 @@ public class TradeEntity {
         );
     }
 
-    public Trade toDomain(ExecutionReportId executionReportId) {
+    public Trade toDomain() {
         return new Trade(
             TradeId.of(id),
             OrderId.of(orderId),
-            executionReportId,
+            ExecutionReportId.of(executionReportId),
             AccountId.of(accountId),
             InstrumentSymbol.of(symbol),
             side,
@@ -105,6 +111,10 @@ public class TradeEntity {
 
     public String getOrderId() {
         return orderId;
+    }
+
+    public String getExecutionReportId() {
+        return executionReportId;
     }
 
     public String getAccountId() {
@@ -131,4 +141,3 @@ public class TradeEntity {
         return createdAt;
     }
 }
-

@@ -227,6 +227,7 @@ Response fields:
 
 - `tradeId`
 - `orderId`
+- `executionReportId`
 - `accountId`
 - `symbol`
 - `side`

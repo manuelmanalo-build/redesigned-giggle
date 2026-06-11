@@ -133,6 +133,7 @@ class CorePersistenceIntegrationTest {
             Quantity.of(100),
             Price.of("101.2500")
         );
+        executionReportRepository.saveAndFlush(ExecutionReportEntity.fromDomain(report, now));
         Trade trade = Trade.fromExecutionReport(
             TradeId.of("trade-1"),
             AccountId.of("account-1"),
@@ -148,11 +149,61 @@ class CorePersistenceIntegrationTest {
             .satisfies(found -> {
                 assertThat(found.getId()).isEqualTo("trade-1");
                 assertThat(found.getOrderId()).isEqualTo("order-trade");
+                assertThat(found.getExecutionReportId()).isEqualTo("exec-trade-1");
                 assertThat(found.getAccountId()).isEqualTo("account-1");
                 assertThat(found.getSymbol()).isEqualTo("AAPL");
                 assertThat(found.getQuantity()).isEqualTo(100);
                 assertThat(found.getPrice()).isEqualByComparingTo(new BigDecimal("101.2500"));
+                assertThat(found.toDomain()).isEqualTo(trade);
             });
+    }
+
+    @Test
+    void enforcesOneTradePerExecutionReport() {
+        Instant now = Instant.parse("2026-06-09T17:12:00Z");
+        saveAcceptedMarketOrder("order-trade-unique-report", now);
+        ExecutionReport report = ExecutionReport.fill(
+            ExecutionReportId.of("exec-trade-unique-report"),
+            OrderId.of("order-trade-unique-report"),
+            Quantity.of(100),
+            Price.of("101.2500")
+        );
+        executionReportRepository.saveAndFlush(ExecutionReportEntity.fromDomain(report, now));
+        Trade trade = Trade.fromExecutionReport(
+            TradeId.of("trade-unique-report-1"),
+            AccountId.of("account-1"),
+            InstrumentSymbol.of("AAPL"),
+            OrderSide.BUY,
+            report
+        );
+        tradeRepository.saveAndFlush(TradeEntity.fromDomain(trade, now));
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+            """
+                INSERT INTO trades (
+                    id,
+                    order_id,
+                    execution_report_id,
+                    account_id,
+                    symbol,
+                    side,
+                    quantity,
+                    price,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "trade-unique-report-2",
+            "order-trade-unique-report",
+            "exec-trade-unique-report",
+            "account-1",
+            "AAPL",
+            "BUY",
+            100,
+            new BigDecimal("101.2500"),
+            Timestamp.from(now)
+        ))
+            .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

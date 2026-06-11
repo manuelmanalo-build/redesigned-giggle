@@ -9,6 +9,7 @@ import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
 public record TradeResponse(
     String tradeId,
     String orderId,
+    String executionReportId,
     String accountId,
     String symbol,
     OrderSide side,
@@ -21,6 +22,7 @@ public record TradeResponse(
         return new TradeResponse(
             trade.getId(),
             trade.getOrderId(),
+            trade.getExecutionReportId(),
             trade.getAccountId(),
             trade.getSymbol(),
             trade.getSide(),

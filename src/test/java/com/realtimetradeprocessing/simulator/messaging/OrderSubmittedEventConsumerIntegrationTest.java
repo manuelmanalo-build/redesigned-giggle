@@ -40,6 +40,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 @SpringBootTest(properties = {
     "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
+    "trade.messaging.jms-publisher-enabled=false",
     "trade.messaging.jms-listener-enabled=false",
     "trade.execution.simulated-market-price=100.00"
 })

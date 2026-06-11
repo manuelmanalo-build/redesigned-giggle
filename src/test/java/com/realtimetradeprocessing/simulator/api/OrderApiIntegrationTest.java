@@ -56,6 +56,7 @@ import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepo
 
 @SpringBootTest(properties = {
     "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
+    "trade.messaging.jms-publisher-enabled=false",
     "trade.messaging.jms-listener-enabled=false"
 })
 @AutoConfigureMockMvc
@@ -273,6 +274,7 @@ class OrderApiIntegrationTest {
         mockMvc.perform(get("/api/v1/orders/{orderId}/trades", orderId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].tradeId").value("trade-api-1"))
+            .andExpect(jsonPath("$[0].executionReportId").value("exec-api-1"))
             .andExpect(jsonPath("$[0].quantity").value(100))
             .andExpect(jsonPath("$[0].price").value(185.5000));
     }

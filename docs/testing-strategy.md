@@ -4,7 +4,7 @@
 
 The project should be built test-first where practical. Tests must prove the order submission, persistence, JMS processing, execution report, trade creation, idempotency, and error-handling behavior.
 
-The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, JMS publisher unit tests, and PostgreSQL-backed persistence/API/consumer integration tests. Broker-backed JMS publish/consume tests should be added as a future hardening step.
+The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, JMS publisher unit tests, PostgreSQL-backed persistence/API/consumer integration tests, and an Artemis-backed end-to-end publish/consume test.
 
 ## Test Commands
 
@@ -79,6 +79,7 @@ Tools:
 Run against PostgreSQL Testcontainers:
 
 - Core persistence tests currently verify save/find behavior for orders, execution reports, and trades.
+- Trade persistence verifies the required link from each trade to the execution report that created it.
 - Table constraints enforce unique idempotency keys.
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
@@ -97,7 +98,7 @@ Run against embedded Artemis or an Artemis Testcontainer:
 
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
 - Current API integration tests verify the `OrderEventPublisher` seam without starting a broker.
-- Future broker-backed tests should verify that order submission publishes a readable message to Artemis.
+- A broker-backed Artemis Testcontainers test verifies that REST order submission publishes a message that the asynchronous listener consumes.
 - Current consumer integration tests invoke `OrderSubmittedEventConsumer` directly against PostgreSQL.
 - Consumer tests verify market-order fills, marketable limit fills, non-marketable limit no-fills, missing-order safety, and duplicate delivery idempotency.
 - Retryable failures trigger redelivery behavior.

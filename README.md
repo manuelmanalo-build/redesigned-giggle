@@ -194,8 +194,8 @@ Expected workflow:
 
 ## Testing
 
-The current test suite includes domain unit tests, execution simulator unit tests, controller validation tests, publisher unit tests, application startup smoke tests, and PostgreSQL Testcontainers integration tests for persistence, REST API behavior, and consumer-side execution processing. Broker-backed JMS tests remain a future hardening step.
+The current test suite includes domain unit tests, execution simulator unit tests, controller validation tests, publisher unit tests, application startup smoke tests, PostgreSQL Testcontainers integration tests, and an Artemis-backed end-to-end JMS flow test.
 
 See [docs/testing-strategy.md](docs/testing-strategy.md).
 
-Docker must be running for the PostgreSQL integration tests.
+Docker must be running for the PostgreSQL and Artemis integration tests.

@@ -25,7 +25,7 @@ The project is intentionally small, but it contains the backend topics interview
 ## Data Structures
 
 - Database indexes support lookup by order ID, account, symbol, status, and creation time.
-- Primary keys enforce request idempotency and deterministic report/trade IDs make duplicate message side effects detectable.
+- Primary keys enforce request idempotency, deterministic report IDs make duplicate message side effects detectable, and a unique trade-to-execution-report link prevents duplicate trades for one fill report.
 - Queues model asynchronous order processing.
 - Ordered execution reports provide lifecycle history.
 - Pagination protects list APIs from unbounded result sets.
@@ -68,7 +68,7 @@ Start by identifying the specific endpoint or consumer path with high p99, then 
 - PostgreSQL is the source of truth.
 - The current MVP schema includes `orders`, `execution_reports`, `trades`, and `idempotency_records`.
 - Account and instrument are currently persisted as explicit order/trade fields (`account_id`, `symbol`) to keep the first persistence step focused; separate reference-data tables remain a planned extension.
-- Foreign keys protect execution report, trade, and idempotency references to orders.
+- Foreign keys protect execution report, trade, and idempotency references to orders, and trades also reference the execution report that created them.
 - The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
 - Order submission claims the idempotency key, stores the order, and completes the idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
 - Order-submitted publication runs after transaction commit, so rolled-back orders are not emitted to JMS.
@@ -78,7 +78,7 @@ Start by identifying the specific endpoint or consumer path with high p99, then 
 - SQL constraints enforce enum values, market/limit price consistency, fill report quantity/price consistency, and valid idempotency response status ranges.
 - `orders.client_order_id` supports client/FIX-style lookup by `ClOrdID`.
 - `orders.account_id`, `orders.symbol`, and `orders.status` indexes support common query filters and operational screens.
-- `execution_reports.order_id` and `trades.order_id` indexes support order-lifecycle history reads.
+- `execution_reports.order_id` and `trades.order_id` indexes support order-lifecycle history reads; `trades.execution_report_id` supports the one-trade-per-fill-report invariant.
 - The separate `idempotency_records.idempotency_key` index is redundant with the primary key in PostgreSQL, but it is intentionally listed in the migration to satisfy the explicit MVP indexing requirement and make the access path obvious during review.
 - Transactions define when order submission and message consumption become durable.
 - Testcontainers proves behavior against real PostgreSQL.
@@ -94,9 +94,11 @@ Start by identifying the specific endpoint or consumer path with high p99, then 
 - `ExecutionSimulator` is an abstraction, which keeps market/limit execution rules testable and replaceable.
 - MARKET orders fill at the configured simulated market price; LIMIT orders fill only when the buy/sell limit crosses that price.
 - The processor writes execution reports, trades, and order updates in one transaction.
+- Listener sessions are transacted so a processing exception rolls back acknowledgement and lets Artemis redeliver.
 - The MVP uses direct after-commit JMS publication instead of a transactional outbox. This is simpler and explainable, but a crash or broker outage after database commit can lose an event.
 - A production-grade extension would add an outbox table and relay to retry publication independently.
 - Consumers are idempotent because JMS can redeliver messages.
+- Broker-backed Testcontainers coverage verifies a real REST-to-JMS-to-database path instead of only mocked publisher seams.
 - Retry and DLQ behavior are part of the design, even if broker defaults are used first.
 
 ## CI/CD
