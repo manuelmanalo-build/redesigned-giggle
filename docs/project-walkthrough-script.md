@@ -98,7 +98,7 @@ JMS delivery is at least once. So the consumer assumes the same event can arrive
 
 For fills, the trade has a deterministic ID as well, and the database enforces that a trade references one execution report with a unique `execution_report_id`. That means duplicate processing cannot create multiple trades for the same fill report.
 
-The honest limitation is that this project does not yet have a dedicated inbox table. I would add one for production because it gives better operational visibility into processed message IDs, attempts, errors, and DLQ behavior.
+The project also has a processed-message inbox table. That gives operational visibility into processed message IDs, duplicate observations, attempts, failures, and the metadata I would need for retry or DLQ investigation.
 
 ## 6. 3-Minute Explanation Of Concurrency And Throughput
 
@@ -185,6 +185,6 @@ The project now uses a transactional outbox. Order submission writes the order, 
 
 The project also uses a processed-message inbox. That makes duplicate observations and failed attempts queryable. The next production step would be broker-level DLQ integration: either a DLQ listener or an operational reconciliation job that marks poisoned messages `DEAD_LETTERED` and links them to broker diagnostics.
 
-After that, I would add authentication and authorization, explicit order amendment versions, amendment events for replace, paginated search endpoints, partial-fill simulation, and load tests around queue depth, database locks, connection pool sizing, and p99 latency.
+After that, I would add authentication and authorization, explicit order amendment versions, amendment events for replace, keyset pagination for deep searches, partial-fill simulation, and production-like capacity tests built from the current local load diagnostics.
 
 So my closing summary would be: this project is interview-ready as a compact backend system because it demonstrates the important decisions clearly. For production, I would harden the async reliability model, security model, and operational runbooks before scaling it further.

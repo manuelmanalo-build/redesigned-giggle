@@ -94,11 +94,12 @@ The current design is safe enough for the MVP, but pessimistic locking can becom
 - Listener concurrency, Hikari connection pool size, and HTTP worker count affect thread pressure and latency.
 - For high p99 latency, correlate application timers with GC pauses, CPU, blocked threads, Hikari pool wait, PostgreSQL locks, and Artemis queue depth.
 - The repo includes `docs/jvm-gc-performance-notes.md` and helper scripts for local GC logging.
+- The repo also includes `docs/performance-load-testing.md`, a k6 load script, and PostgreSQL lock diagnostics for local p95/p99 investigation.
 - G1GC is a reasonable default for a Spring Boot service; the goal is predictable pauses, not maximum raw throughput.
 
 Concise high-latency answer:
 
-I would identify the endpoint or consumer path with high p99, then compare Micrometer timings, GC logs, CPU, thread dumps, Hikari pool wait time, PostgreSQL slow queries/locks, and broker queue depth/redeliveries. If GC pauses align with latency spikes, I would inspect allocation rate and heap pressure. If threads are blocked on JDBC or the broker while GC is quiet, I would treat it as a database, broker, or queueing problem.
+I would identify whether the p99 is in the REST path, the outbox relay, or JMS consumption. Then I would compare k6 latency, Micrometer timers, Hikari active/pending/acquire metrics, PostgreSQL lock diagnostics, Artemis queue depth/redeliveries, CPU/thread dumps, and GC logs. If GC pauses align with the spikes, I would inspect allocation rate and heap pressure. If GC is quiet but threads wait on JDBC or broker calls, I would treat it as a database, broker, or queueing problem before tuning JVM flags.
 
 ## 7. REST API Design Discussion
 
@@ -385,9 +386,8 @@ Known limitations:
 - Replace updates orders in place rather than preserving explicit order versions.
 - Replace does not publish a new JMS event; a production venue adapter would usually emit an amendment event.
 - No partial-fill simulation path yet, even though domain states include `PARTIALLY_FILLED`.
-- No list/search endpoints or pagination implementation yet.
 - No real market data, matching engine, or external venue integration.
-- No load tests or capacity sizing.
+- Load testing is local and diagnostic only; there is no formal capacity model, soak test, or production-like benchmark environment.
 - No production IaC for AWS deployment.
 - Simplified FIX parser is educational only.
 
@@ -396,10 +396,10 @@ Improvements:
 - Add DLQ dashboards and poison-message runbooks around broker redelivery.
 - Add secured account/instrument administration and richer validation rules such as permissioned trading, tick-size enforcement, and venue eligibility.
 - Add explicit order versioning and amendment events for replace workflows.
-- Add paginated search endpoints with composite indexes.
+- Add keyset pagination for deep operational searches.
 - Add auth with role-based access.
 - Add realistic partial-fill and rejection scenarios.
-- Add load tests around API throughput, queue depth, DB locks, and p99 latency.
+- Promote local load diagnostics into repeatable capacity tests only when realistic data volume and production-like infrastructure exist.
 - Add AWS IaC and deployment pipeline.
 
 ## 16. Five Likely Interviewer Questions And Strong Answers
@@ -422,4 +422,4 @@ Order submission is one database transaction for the order, idempotency record, 
 
 ### 5. How would you investigate high p99 latency in this service?
 
-I would start by separating API latency from consumer processing latency. For APIs, I would check request metrics, error rates, thread dumps, Hikari pool wait time, RDS CPU/locks/slow queries, and GC logs. For consumers, I would check processing duration, queue depth, oldest message age, redeliveries, broker health, and database lock contention. If GC pauses align with spikes, I would inspect allocation pressure and heap sizing. If threads are waiting on JDBC or the broker, I would tune database queries, indexes, connection pools, or consumer concurrency before changing JVM flags.
+I would start by separating API latency from consumer processing latency. For APIs, I would check k6 p95/p99, request metrics, error rates, Hikari active/pending/acquire metrics, PostgreSQL locks/slow queries, thread dumps, and GC logs. For consumers, I would check `trade.messages.processing.duration`, Artemis queue depth, oldest message age, redeliveries, broker health, `processed_messages` failures, and database lock contention. If GC pauses align with spikes, I would inspect allocation pressure and heap sizing. If threads are waiting on JDBC or the broker, I would tune queries, indexes, pool sizing, transaction scope, or consumer concurrency before changing JVM flags.

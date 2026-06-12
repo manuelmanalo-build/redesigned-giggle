@@ -58,6 +58,7 @@ This project is designed to demonstrate:
 - [FIX Protocol Notes](docs/fix-protocol-notes.md)
 - [AWS Deployment Notes](docs/aws-deployment-notes.md)
 - [JVM and GC Performance Notes](docs/jvm-gc-performance-notes.md)
+- [Performance Load Testing](docs/performance-load-testing.md)
 - [Demo Script](docs/demo-script.md)
 - [Project Walkthrough Script](docs/project-walkthrough-script.md)
 - [Interview Talking Points](docs/interview-talking-points.md)
@@ -158,6 +159,10 @@ Useful operational endpoints:
 - `GET /actuator/metrics/trade.trades.created`
 - `GET /actuator/metrics/trade.messages.processing.failures`
 - `GET /actuator/metrics/trade.messages.processing.duration`
+- `GET /actuator/metrics/http.server.requests`
+- `GET /actuator/metrics/hikaricp.connections.active`
+- `GET /actuator/metrics/hikaricp.connections.pending`
+- `GET /actuator/metrics/hikaricp.connections.acquire`
 
 REST responses include an `X-Correlation-Id` response header. If the client does not provide one, the application generates one and uses it in logs and order-submitted events.
 
@@ -178,6 +183,7 @@ docker compose up -d
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ./scripts/run-local-with-gc-logs.sh
 ./scripts/run-load-demo.sh
+k6 run scripts/load/order-load-test.js
 docker build -t realtime-trade-processing-simulator:local .
 docker compose down
 ```
@@ -219,6 +225,12 @@ Optional helper scripts:
 
 - `./scripts/run-local-with-gc-logs.sh`: starts the packaged app with local demo heap settings, G1GC, and rotating GC logs under `logs/gc`.
 - `./scripts/run-load-demo.sh`: sends a small configurable burst of order submissions to a running local app. This is a smoke/load demo, not a benchmark.
+
+## Performance Load Testing
+
+For a targeted local load test around API p95/p99 latency, queue depth, Hikari pool pressure, and PostgreSQL lock diagnostics, see [docs/performance-load-testing.md](docs/performance-load-testing.md).
+
+The k6 scenario lives in [scripts/load/order-load-test.js](scripts/load/order-load-test.js). It is manual by design and is not part of normal CI.
 
 ## Development Workflow
 
