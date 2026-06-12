@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system will accept orders through REST, validate and persist them, publish order-submitted events to JMS, process those events asynchronously, simulate executions, create execution reports and trades, update order state, and expose query APIs.
 
-The repository currently contains the Spring Boot skeleton, the pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, JMS order-submitted publication, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
+The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, JMS order-submitted publication, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
 
 ## Project Summary
 
@@ -18,7 +18,7 @@ The MVP models:
 - JMS-backed asynchronous processing.
 - Deterministic execution simulation.
 - Execution report creation.
-- Trade creation for fills and partial fills.
+- Trade creation for filled orders. Partial-fill states are modeled as a planned lifecycle extension.
 - Order status updates.
 - REST reads for orders, execution reports, and trades.
 - Correlation IDs and structured logging.
@@ -28,8 +28,8 @@ The MVP models:
 This project is designed to demonstrate:
 
 - Core Java 21 language and standard library usage.
-- Object-oriented modeling of accounts, instruments, orders, execution reports, trades, and idempotency.
-- Data structures and relational indexes for lookup, deduplication, pagination, and history.
+- Object-oriented modeling of account/instrument identifiers, orders, execution reports, trades, and idempotency.
+- Data structures and relational indexes for lookup, deduplication, pagination-ready query design, and history.
 - Multithreading and asynchronous processing with JMS consumers.
 - JVM and GC awareness around throughput, allocation, backpressure, and listener concurrency.
 - REST API design with Spring Web.
@@ -37,7 +37,7 @@ This project is designed to demonstrate:
 - JMS messaging with ActiveMQ Artemis.
 - Test-driven development with JUnit 5, Mockito, AssertJ, and Testcontainers.
 - CI/CD with Maven and GitHub Actions.
-- Distributed system concepts such as retries, DLQs, idempotency, and transaction boundaries.
+- Distributed system concepts such as idempotency, transaction boundaries, retries, and DLQ-ready design.
 - AWS deployment discussion points.
 - Optional FIX and trade lifecycle vocabulary.
 
@@ -49,10 +49,14 @@ This project is designed to demonstrate:
 - [Domain Model](docs/domain-model.md)
 - [Testing Strategy](docs/testing-strategy.md)
 - [Engineering Standards](docs/engineering-standards.md)
+- [FIX Protocol Notes](docs/fix-protocol-notes.md)
+- [AWS Deployment Notes](docs/aws-deployment-notes.md)
 - [JVM and GC Performance Notes](docs/jvm-gc-performance-notes.md)
+- [Demo Script](docs/demo-script.md)
+- [Project Walkthrough Script](docs/project-walkthrough-script.md)
 - [Interview Talking Points](docs/interview-talking-points.md)
 
-## Local Setup
+## Quickstart
 
 Prerequisites:
 
@@ -83,6 +87,22 @@ Default local credentials:
 - Artemis username: `artemis`.
 - Artemis password: `artemis`.
 
+Start the application locally after Docker Compose is running:
+
+```bash
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+```
+
+Run the demo:
+
+- Follow [docs/demo-script.md](docs/demo-script.md) for copy/paste `curl` commands that submit orders, show idempotency, and inspect health/metrics.
+
 Run tests:
 
 ```bash
@@ -95,12 +115,6 @@ Run the full build:
 
 ```bash
 ./mvnw clean verify
-```
-
-Start the application locally after Docker Compose is running:
-
-```bash
-./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 Health endpoint:
@@ -166,6 +180,7 @@ Current package roots:
 - `common`
 - `config`
 - `domain`
+- `fix`
 - `messaging`
 - `observability`
 - `persistence`

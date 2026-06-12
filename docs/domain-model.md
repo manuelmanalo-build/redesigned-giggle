@@ -8,7 +8,7 @@ This document defines the intended domain model for the MVP. The model is simpli
 
 ### Account
 
-Represents a trading account.
+Represents a trading account. In the current MVP, this is represented by `accountId` on orders and trades; a persisted `accounts` table is planned.
 
 Fields:
 
@@ -18,14 +18,14 @@ Fields:
 - `createdAt`
 - `updatedAt`
 
-Rules:
+Planned rules when account persistence is added:
 
 - Only active accounts can submit orders.
 - Account IDs are unique.
 
 ### Instrument
 
-Represents a tradable instrument.
+Represents a tradable instrument. In the current MVP, this is represented by `symbol` on orders and trades; a persisted `instruments` table is planned.
 
 Fields:
 
@@ -37,7 +37,7 @@ Fields:
 - `createdAt`
 - `updatedAt`
 
-Rules:
+Planned rules when instrument persistence is added:
 
 - Only active instruments can be ordered.
 - Symbol is unique.
@@ -56,10 +56,10 @@ Fields:
 - `quantity`
 - `limitPrice`
 - `filledQuantity`
-- `remainingQuantity`
-- `averageExecutionPrice`
+- `remainingQuantity`: derived from persisted `quantity` and `filledQuantity`.
+- `averageExecutionPrice`: planned extension.
 - `status`
-- `version`: optimistic locking value.
+- `version`: planned extension if optimistic locking is added.
 - `createdAt`
 - `updatedAt`
 
@@ -81,11 +81,11 @@ Fields:
 - `orderId`
 - `executionType`
 - `orderStatus`
-- `lastQuantity`
-- `lastPrice`
-- `cumulativeQuantity`
-- `leavesQuantity`
-- `averagePrice`
+- `lastQuantity`: represented as `executedQuantity` in the current persistence/API model.
+- `lastPrice`: represented as `executionPrice` in the current persistence/API model.
+- `cumulativeQuantity`: planned extension.
+- `leavesQuantity`: planned extension.
+- `averagePrice`: planned extension.
 - `message`
 - `correlationId`
 - `createdAt`
@@ -111,7 +111,7 @@ Fields:
 - `side`
 - `quantity`
 - `price`
-- `tradeDate`
+- `tradeDate`: planned extension; current persistence uses `createdAt`.
 - `createdAt`
 
 Rules:
@@ -122,25 +122,23 @@ Rules:
 
 ### IdempotencyRecord
 
-Represents deduplication state for REST submission or message consumption.
+Represents deduplication state for REST submission. A dedicated message-consumption inbox table is planned.
 
 Fields:
 
 - `idempotencyKey`
-- `scope`: `ORDER_SUBMISSION` or `MESSAGE_CONSUMPTION`.
-- `requestFingerprint`
-- `resourceType`
-- `resourceId`
+- `requestFingerprint`: persisted as `request_hash`.
+- `resourceId`: persisted as `order_id`.
 - `responseStatus`
-- `status`: `STARTED`, `COMPLETED`, or `FAILED`.
+- `status`: planned extension.
 - `createdAt`
 - `updatedAt`
 
 Rules:
 
-- `(scope, idempotencyKey)` is unique.
+- `idempotencyKey` is unique for REST submissions.
 - Reuse with a different request fingerprint is a conflict.
-- Completed records can return the original logical result.
+- Completed records return the same order resource and response status for equivalent retry requests.
 
 ## Enums
 
@@ -205,7 +203,7 @@ The MVP simulator is deterministic for tests. Current rules:
 
 ## Invariants
 
-- Accepted orders must reference an active account and instrument.
+- Accepted orders currently carry non-blank `account_id` and `symbol`; active account/instrument reference-data validation is planned.
 - Every execution report references exactly one order.
 - Every trade references exactly one order and one execution report.
 - A fill or partial fill execution report must create a trade.

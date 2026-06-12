@@ -1,156 +1,375 @@
 # Interview Talking Points
 
-## Project Pitch
+## 1. 30-Second Project Summary
 
-This project is a Java 21 Spring Boot backend that simulates real-time order processing. A client submits an order through REST, the service validates and stores it, publishes an order-submitted event to JMS, an asynchronous consumer simulates execution, and the system creates execution reports, trades, and queryable order state.
+This project is a Java 21 Spring Boot backend that simulates a simplified real-time trade processing platform. A client submits an order through `POST /api/v1/orders`; the service validates it, stores it in PostgreSQL, records an idempotency claim, and publishes an `OrderSubmittedEvent` to the `order.submitted` JMS queue after the database transaction commits. An asynchronous consumer receives the event, locks the order row, simulates execution, writes an execution report, creates a trade for fills, and updates order state. The project demonstrates domain modeling, REST APIs, SQL constraints, JMS messaging, concurrency-safe processing, observability, Testcontainers-based integration tests, CI, and cloud deployment tradeoffs.
 
-The project is intentionally small, but it contains the backend topics interviewers usually probe: OOP, data modeling, concurrency, messaging, SQL, testing, idempotency, and operational thinking.
+## 2. Architecture Explanation
 
-## Java
+The codebase is a modular monolith with explicit package boundaries:
 
-- Java 21 records can model immutable request, response, command, and event payloads.
-- Enums model `OrderSide`, `OrderType`, `OrderStatus`, and `ExecutionType`.
-- Collections support query results, state history, and deduplication logic.
-- Exceptions and result objects communicate validation and state-transition failures.
-- `BigDecimal` should be used for prices and average execution price, not floating-point types.
+- `api`: `OrderController`, request/response DTOs, error responses, and `GlobalApiExceptionHandler`.
+- `application`: orchestration services such as `OrderApplicationService`, `OrderExecutionProcessor`, and `ExecutionSimulator`.
+- `domain`: pure Java domain records and enums such as `Order`, `Quantity`, `Price`, `ExecutionReport`, and `Trade`.
+- `persistence`: JPA entities, Spring Data repositories, and Flyway-managed schema.
+- `messaging`: JMS event payload, publisher abstraction, publisher implementation, and consumer.
+- `observability`: correlation ID filter and Micrometer metrics.
+- `fix`: simplified educational FIX parser and New Order Single mapper.
 
-## OOP and Domain Modeling
+Core flow:
 
-- `Order`, `ExecutionReport`, `Trade`, `Account`, and `Instrument` are explicit domain concepts.
-- Business rules are not hidden in controllers.
-- Status transitions are testable and constrained.
-- Trade creation is derived from execution report behavior.
-- API DTOs, JMS payloads, domain objects, and JPA entities remain separate where useful.
+1. `OrderController.submitOrder` receives `POST /api/v1/orders` with an `Idempotency-Key`.
+2. `CorrelationIdFilter` resolves or creates the correlation ID.
+3. `SubmitOrderRequest` validation handles request shape.
+4. `OrderApplicationService.submitOrder` builds a domain `Order`, accepts it, and computes a SHA-256 request fingerprint.
+5. `IdempotencyRecordJpaRepository.claimSubmission` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
+6. The service saves the order and completes the idempotency record in one Spring transaction.
+7. `TransactionSynchronization.afterCommit` publishes `OrderSubmittedEvent` only after the database commit.
+8. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderExecutionProcessor`.
+9. `OrderExecutionProcessor` uses a pessimistic write lock, deterministic execution-report IDs, and database constraints to avoid duplicate side effects.
+10. Query endpoints return order state, execution reports, and trades from PostgreSQL.
 
-## Data Structures
+The architecture is deliberately not split into microservices. For interview purposes, the value is in the clarity of boundaries and failure-mode discussion, not distributed complexity for its own sake.
 
-- Database indexes support lookup by order ID, account, symbol, status, and creation time.
-- Primary keys enforce request idempotency, deterministic report IDs make duplicate message side effects detectable, and a unique trade-to-execution-report link prevents duplicate trades for one fill report.
-- Queues model asynchronous order processing.
-- Ordered execution reports provide lifecycle history.
-- Pagination protects list APIs from unbounded result sets.
+## 3. Java/OOP Concepts Demonstrated
 
-## Multithreading and Concurrency
+- Java 21 records model immutable domain/value objects: `Order`, `Quantity`, `Price`, `ExecutionReport`, `Trade`, and ID wrappers.
+- Enums model constrained domain vocabularies: `OrderSide`, `OrderType`, `OrderStatus`, and `ExecutionType`.
+- Domain invariants live in domain constructors and methods, not controllers. For example, `Order` rejects limit orders without price and market orders with price.
+- `Order.transitionTo` centralizes valid state transitions and throws `DomainException` for invalid lifecycle movement.
+- `Trade.fromExecutionReport` expresses that trades are derived from fill execution reports.
+- Interfaces provide testable substitution points: `OrderEventPublisher` decouples application logic from `JmsTemplate`, and `ExecutionSimulator` decouples execution rules from the consumer.
+- DTOs, domain objects, JMS payloads, and JPA entities are separate. That keeps API, persistence, messaging, and business rules from leaking into each other.
+- Constructor injection is used for Spring dependencies.
 
-- REST handlers process many client submissions concurrently.
-- JMS listener concurrency allows multiple orders to process in parallel.
-- Idempotency keys protect client retries, and PostgreSQL `ON CONFLICT DO NOTHING` claim inserts make concurrent first submissions deterministic.
-- Current duplicate delivery protection uses deterministic execution-report/trade IDs derived from the event ID.
-- The consumer locks the order row while it decides whether to create an execution report, create a trade, and update order state.
-- A production extension would add a dedicated processed-message inbox table for richer retry/DLQ diagnostics.
-- Domain services should avoid mutable shared state.
+Strong OOP answer:
 
-## JVM and GC Awareness
+The domain model is not just getters and setters. It encodes rules around order construction, price requirements, quantity validation, state transitions, and trade creation. Persistence entities exist because JPA has different needs from the domain model, so mapping is explicit.
 
-- High message throughput can create allocation pressure from DTOs, JSON serialization, and database mapping.
-- Connection pool and listener concurrency settings affect throughput and latency.
-- `BigDecimal` correctness is worth the allocation cost for money-like values.
-- JVM profiling should focus on real bottlenecks before optimization.
-- GC discussions can cover object churn, batching, backpressure, and avoiding unnecessary temporary objects.
-- For local demos, GC logs can be enabled with G1GC and bounded heap settings to inspect allocation pressure and pause behavior.
+## 4. Data Structures Used And Why
 
-Concise high-latency investigation answer:
+- Relational tables store authoritative state: `orders`, `execution_reports`, `trades`, and `idempotency_records`.
+- Primary keys enforce identity for orders, execution reports, trades, and idempotency records.
+- `idempotency_records.idempotency_key` acts as a deduplication set for client retries.
+- Deterministic execution-report and trade IDs derived from event IDs make duplicate message handling idempotent.
+- `trades.execution_report_id` is unique, enforcing one trade per fill execution report.
+- Indexes support expected lookup paths:
+  - `orders(client_order_id)` for client/FIX-style lookup.
+  - `orders(account_id)`, `orders(symbol)`, and `orders(status)` for operational filtering.
+  - `execution_reports(order_id)` and `trades(order_id)` for order lifecycle history.
+  - `trades(execution_report_id)` for the fill-report-to-trade invariant.
+- `LinkedHashMap` in the simplified FIX parser preserves tag insertion order, which is useful for deterministic parsing behavior and debugging.
+- Queues provide asynchronous buffering between order submission and execution processing.
 
-Start by identifying the specific endpoint or consumer path with high p99, then correlate the spike with application logs, Micrometer timers, GC pause metrics, CPU, thread count, Hikari pool wait time, PostgreSQL slow queries/locks, and Artemis queue depth/redeliveries. If GC pauses or allocation rate line up with the spike, inspect heap pressure, object churn, and thread dumps. If app threads are waiting on JDBC or the broker while GC is quiet, treat it as a database, broker, or queueing problem. Change one variable at a time and validate with a repeatable load shape.
+## 5. Multithreading And Concurrency Concepts Demonstrated
 
-## REST
+- REST requests are handled concurrently by the web container, so idempotency cannot rely on in-memory checks.
+- Client retry concurrency is handled at the database layer using `INSERT ... ON CONFLICT DO NOTHING` in `IdempotencyRecordJpaRepository.claimSubmission`.
+- JMS consumers may run concurrently. The listener concurrency is configurable through Spring JMS settings.
+- `OrderJpaRepository.findByIdForUpdate` uses `PESSIMISTIC_WRITE` to serialize processing for the same order.
+- `OrderExecutionProcessor` checks for an existing deterministic execution report before and after acquiring the order lock, reducing duplicate-message race windows.
+- JMS listener sessions are transacted in `JmsListenerConfig`, so processing failures can roll back acknowledgement and allow redelivery.
+- Domain services avoid mutable shared state. State changes go through database transactions.
 
-- `POST /api/v1/orders` currently returns `201 Created` after persisting the accepted order and registering JMS publication; this can move back to `202 Accepted` when asynchronous execution processing owns more of the lifecycle.
-- `Idempotency-Key` makes client retries safe by replaying the original logical response for the same normalized request.
-- Reusing an idempotency key with a different normalized request returns `409 Conflict`.
-- Jakarta Bean Validation handles request-shape checks, while domain objects enforce business rules such as market/limit price requirements.
-- `X-Correlation-Id` is accepted from clients, included in error responses, and carried into `OrderSubmittedEvent`.
-- `GET` endpoints expose current order state, execution reports, and trades.
-- Error responses are consistent and include timestamp, HTTP status, error code, message, path, and correlation ID.
+Senior-level nuance:
 
-## SQL and Persistence
+The current design is safe enough for the MVP, but pessimistic locking can become a throughput bottleneck for hot orders or accounts. A higher-throughput version could use conditional SQL updates, optimistic locking, or partitioned event processing by order ID/account ID.
 
-- PostgreSQL is the source of truth.
-- The current MVP schema includes `orders`, `execution_reports`, `trades`, and `idempotency_records`.
-- Account and instrument are currently persisted as explicit order/trade fields (`account_id`, `symbol`) to keep the first persistence step focused; separate reference-data tables remain a planned extension.
-- Foreign keys protect execution report, trade, and idempotency references to orders, and trades also reference the execution report that created them.
-- The idempotency key is the primary key for `idempotency_records`, which lets PostgreSQL enforce duplicate-submission protection.
-- Order submission claims the idempotency key, stores the order, and completes the idempotency record in one Spring-managed transaction, so client retry state and durable order state commit together.
-- Order-submitted publication runs after transaction commit, so rolled-back orders are not emitted to JMS.
-- The request hash is based on normalized business fields, so superficial JSON formatting differences do not create false idempotency conflicts.
-- Numeric price columns use `NUMERIC(19, 4)` to avoid floating-point money errors.
-- Quantity columns use integer types with positive check constraints because order quantities are discrete in the MVP.
-- SQL constraints enforce enum values, market/limit price consistency, fill report quantity/price consistency, and valid idempotency response status ranges.
-- `orders.client_order_id` supports client/FIX-style lookup by `ClOrdID`.
-- `orders.account_id`, `orders.symbol`, and `orders.status` indexes support common query filters and operational screens.
-- `execution_reports.order_id` and `trades.order_id` indexes support order-lifecycle history reads; `trades.execution_report_id` supports the one-trade-per-fill-report invariant.
-- The separate `idempotency_records.idempotency_key` index is redundant with the primary key in PostgreSQL, but it is intentionally listed in the migration to satisfy the explicit MVP indexing requirement and make the access path obvious during review.
-- Transactions define when order submission and message consumption become durable.
-- Testcontainers proves behavior against real PostgreSQL.
+## 6. JVM/GC Discussion Points
 
-## JMS
+- Main allocation sources are JSON serialization/deserialization, request/response DTOs, JPA entity hydration, records/value objects, `BigDecimal`, and logging context.
+- `BigDecimal` is intentionally used for prices because correctness matters more than micro-allocation savings for money-like values.
+- Listener concurrency, Hikari connection pool size, and HTTP worker count affect thread pressure and latency.
+- For high p99 latency, correlate application timers with GC pauses, CPU, blocked threads, Hikari pool wait, PostgreSQL locks, and Artemis queue depth.
+- The repo includes `docs/jvm-gc-performance-notes.md` and helper scripts for local GC logging.
+- G1GC is a reasonable default for a Spring Boot service; the goal is predictable pauses, not maximum raw throughput.
 
-- ActiveMQ Artemis decouples API submission from execution processing.
-- `order.submitted` is the initial durable queue.
-- `OrderEventPublisher` is an application-facing abstraction, so the order service is not coupled directly to `JmsTemplate`.
-- `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` explicitly as JSON and sets JMS metadata such as event type, event ID, order ID, and correlation ID.
-- Message payloads include event identity, order ID, client order ID, account ID, symbol, side, type, quantity, limit price, correlation ID, and creation time.
-- `OrderSubmittedEventConsumer` deserializes JSON explicitly, puts the correlation ID into logging context, and delegates business work to `OrderExecutionProcessor`.
-- `ExecutionSimulator` is an abstraction, which keeps market/limit execution rules testable and replaceable.
-- MARKET orders fill at the configured simulated market price; LIMIT orders fill only when the buy/sell limit crosses that price.
-- The processor writes execution reports, trades, and order updates in one transaction.
-- Listener sessions are transacted so a processing exception rolls back acknowledgement and lets Artemis redeliver.
-- The MVP uses direct after-commit JMS publication instead of a transactional outbox. This is simpler and explainable, but a crash or broker outage after database commit can lose an event.
-- A production-grade extension would add an outbox table and relay to retry publication independently.
-- Consumers are idempotent because JMS can redeliver messages.
-- Broker-backed Testcontainers coverage verifies a real REST-to-JMS-to-database path instead of only mocked publisher seams.
-- Retry and DLQ behavior are part of the design, even if broker defaults are used first.
+Concise high-latency answer:
 
-## CI/CD
+I would identify the endpoint or consumer path with high p99, then compare Micrometer timings, GC logs, CPU, thread dumps, Hikari pool wait time, PostgreSQL slow queries/locks, and broker queue depth/redeliveries. If GC pauses align with latency spikes, I would inspect allocation rate and heap pressure. If threads are blocked on JDBC or the broker while GC is quiet, I would treat it as a database, broker, or queueing problem.
 
-- Maven provides repeatable local and CI builds.
-- GitHub Actions should run `./mvnw -B clean verify`.
-- CI should include unit tests, slice tests, PostgreSQL integration tests, and JMS integration tests.
-- A clean pipeline demonstrates that the project is not just a local demo.
+## 7. REST API Design Discussion
 
-## TDD
+Implemented endpoints:
 
-- Start with unit tests for domain validation and state transitions.
-- Add service tests for idempotent submission and orchestration.
-- Add API tests for request validation and error contracts.
-- Add integration tests for database constraints and JMS behavior.
-- Use failing tests to guide each implementation step.
+- `POST /api/v1/orders`
+- `GET /api/v1/orders/{orderId}`
+- `GET /api/v1/orders/{orderId}/execution-reports`
+- `GET /api/v1/orders/{orderId}/trades`
 
-## AWS and Cloud Discussion
+Design points:
 
-The MVP runs locally, but it can be mapped to AWS concepts:
+- `POST /api/v1/orders` requires `Idempotency-Key`.
+- `X-Correlation-Id` is optional; the service generates one when absent and returns it in responses.
+- Request validation uses Jakarta Bean Validation on DTOs and headers.
+- Domain validation is still enforced separately through `Order`, `Quantity`, `Price`, `AccountId`, and `InstrumentSymbol`.
+- Errors use a consistent `ApiErrorResponse` shape through `GlobalApiExceptionHandler`.
+- `409 Conflict` is used when an idempotency key is reused with a different normalized request.
+- Query endpoints verify that the order exists before returning execution reports or trades.
+- The POST currently returns `201 Created` after persistence and event registration; a future asynchronous API could return `202 Accepted` if execution ownership moves further into the async layer.
 
-- The simplest production-shaped deployment is the Spring Boot container on ECS Fargate behind an ALB, with PostgreSQL on RDS and JMS-compatible messaging on Amazon MQ.
-- EKS is useful if the company already runs Kubernetes, but it adds cluster and platform complexity; EC2 gives host-level control but creates the most operational burden.
-- SQS/SNS is the AWS-native alternative to JMS and is easier to operate, but the app needs different acknowledgement, visibility-timeout, ordering, and deduplication semantics.
+Tradeoff:
+
+The API is intentionally small and avoids list/search endpoints for now. The schema already has indexes that would support later account, symbol, and status filtering.
+
+## 8. SQL Schema, Indexing, And Transaction Discussion
+
+PostgreSQL is the source of truth. Flyway migrations define and harden the schema:
+
+- `V2__create_core_persistence_tables.sql` creates `orders`, `execution_reports`, `trades`, and `idempotency_records`.
+- `V3__harden_core_constraints.sql` adds enum checks, market/limit price consistency, execution-report fill-field consistency, and response-status checks.
+- `V4__link_trades_to_execution_reports.sql` adds `trades.execution_report_id`, a foreign key, a unique constraint, and an index.
+
+Important constraints:
+
+- Order quantity must be positive.
+- Filled quantity cannot exceed order quantity.
+- Market orders must not have limit price.
+- Limit orders must have limit price.
+- Fill execution reports must have executed quantity and execution price.
+- Non-fill execution reports must not have fill fields.
+- Trades require positive quantity and price.
+- One execution report can create at most one trade.
+
+Transaction boundaries:
+
+- Order submission stores the order and idempotency record in one `@Transactional` method.
+- Event publication is registered with `TransactionSynchronization.afterCommit`, so rolled-back order inserts are not published.
+- Message processing writes execution report, trade, and order status update in one `@Transactional` method.
+- Read endpoints use `@Transactional(readOnly = true)`.
+
+Indexing discussion:
+
+The indexes match current and planned query paths rather than every possible column. The remaining gap is composite/pagination indexes such as `(account_id, created_at)` or `(status, created_at)` once list endpoints are implemented.
+
+## 9. JMS/Messaging Discussion
+
+Messaging components:
+
+- `OrderEventPublisher`: application-facing abstraction.
+- `JmsOrderEventPublisher`: Jackson JSON serialization and JMS send through `JmsTemplate`.
+- `OrderSubmittedEvent`: explicit event payload.
+- `OrderSubmittedEventConsumer`: JMS listener that restores correlation ID and delegates processing.
+- Queue name: `order.submitted`.
+
+Event fields:
+
+- `eventId`
+- `orderId`
+- `clientOrderId`
+- `accountId`
+- `symbol`
+- `side`
+- `type`
+- `quantity`
+- `limitPrice`
+- `correlationId`
+- `createdAt`
+
+Reliability choices:
+
+- Events are published after the database commit.
+- Listener sessions are transacted.
+- Duplicate delivery is handled with deterministic execution-report IDs and unique trade-to-report constraints.
+- Broker-backed Testcontainers coverage verifies a real REST-to-Artemis-to-database path.
+
+Known messaging tradeoff:
+
+The MVP does not implement a transactional outbox. If the process crashes or the broker is unavailable after the database commit but before/during JMS send, an accepted order may not be processed. The production fix is an outbox table plus relay, with retry and operational visibility.
+
+## 10. Distributed Systems Tradeoffs
+
+Tradeoffs already visible in the code:
+
+- At-least-once messaging means duplicate deliveries are expected, so consumers must be idempotent.
+- After-commit direct publish prevents publishing rolled-back work but cannot guarantee publication after commit.
+- Database constraints are used as the final line of defense for invariants.
+- Correlation IDs are propagated through REST and JMS for traceability.
+- The service chooses simplicity over a full saga/outbox/inbox architecture for MVP explainability.
+- Pessimistic locking is simple and correct for duplicate processing, but it may limit throughput.
+- PostgreSQL is a single source of truth, which simplifies consistency but means database health dominates system availability.
+
+How to improve for production:
+
+- Add a transactional outbox for order-submitted events.
+- Add a processed-message inbox table for explicit consumer idempotency and retry diagnostics.
+- Add DLQ dashboards and poison-message handling runbooks.
+- Add authentication/authorization and account/instrument reference data.
+- Add backward-compatible migrations and deployment gates.
+
+## 11. TDD And Testing Strategy
+
+The test suite is layered:
+
+- Domain tests:
+  - `OrderTest`
+  - `ValueObjectTest`
+  - `ExecutionReportAndTradeTest`
+- Application tests:
+  - `DefaultExecutionSimulatorTest`
+- API tests:
+  - `OrderControllerTest`
+  - `OrderApiIntegrationTest`
+- Persistence tests:
+  - `CorePersistenceIntegrationTest` with PostgreSQL Testcontainers.
+- Messaging tests:
+  - `JmsOrderEventPublisherTest`
+  - `OrderSubmittedEventConsumerIntegrationTest`
+  - `OrderJmsEndToEndIntegrationTest` with Artemis and PostgreSQL Testcontainers.
+- FIX tests:
+  - `SimplifiedFixParserTest`.
+- Startup/smoke tests:
+  - `RealtimeTradeProcessingSimulatorApplicationTests`
+  - `TestStackSmokeTest`.
+
+Testing strengths:
+
+- Pure domain behavior is tested without Spring.
+- Database constraints are tested against real PostgreSQL, not H2.
+- Idempotency and duplicate message behavior are covered.
+- Broker-backed E2E coverage proves the actual JMS path.
+- CI runs `./mvnw -B clean verify`.
+
+Testing gaps to discuss honestly:
+
+- No load/performance tests yet.
+- No authentication/authorization tests because auth is not implemented.
+- No migration compatibility tests against older production-like data.
+- No full DLQ/redelivery policy test beyond transacted listener behavior and duplicate safety.
+
+## 12. CI/CD Discussion
+
+GitHub Actions workflow:
+
+- Checks out code.
+- Sets up Java 21 with Temurin.
+- Caches Maven dependencies through `actions/setup-java`.
+- Runs `./mvnw -v`.
+- Runs `./mvnw -B -DskipTests compile`.
+- Runs `./mvnw -B clean verify`.
+- Builds a Docker image tagged `realtime-trade-processing-simulator:ci`.
+
+CI value:
+
+- Verifies the app compiles on a clean Linux runner.
+- Runs unit and integration tests.
+- Exercises Testcontainers-backed PostgreSQL and Artemis paths.
+- Confirms the Dockerfile stays buildable.
+
+Future CI/CD improvements:
+
+- Publish Docker images to a registry.
+- Add vulnerability/dependency scanning.
+- Add formatting/static-analysis gates if project standards require them.
+- Add environment-specific deployment jobs with manual approvals.
+- Add migration checks and rollback planning.
+
+## 13. AWS Deployment Discussion
+
+Recommended AWS deployment:
+
+- Run the Spring Boot container on ECS Fargate behind an Application Load Balancer.
+- Use Amazon RDS PostgreSQL for the database.
+- Use Amazon MQ for ActiveMQ if preserving JMS semantics matters.
+- Send logs and metrics to CloudWatch.
+- Store database and broker credentials in Secrets Manager.
+- Use IAM task roles for AWS access.
+- Use KMS for encryption of RDS, broker storage, secrets, and logs where required.
+
+Alternatives:
+
+- EKS is appropriate if the company already has Kubernetes platform maturity, but it adds operational overhead.
+- EC2 offers host-level control but requires managing patching, scaling, deployment, process supervision, and security.
+- SQS/SNS is simpler and more AWS-native than JMS, but the app would need a different messaging implementation and different visibility-timeout, ordering, and deduplication semantics.
 - MSK/Kafka fits event streaming, replay, and multiple downstream consumers, but it is heavier than a queue for this MVP.
-- CloudWatch should collect structured logs with correlation IDs plus API latency, JVM metrics, Hikari pool pressure, RDS health, broker queue depth, redeliveries, and DLQ counts.
-- IAM task roles, Secrets Manager, and KMS keep credentials and encryption concerns out of the application image.
-- Rolling deployments are a good default; blue/green is safer when release risk is higher, especially with backward-compatible database migrations.
-- Autoscaling should use API request/latency signals for REST tasks and queue depth/message age for consumers, while checking RDS and broker saturation before adding workers.
-- Key failure modes are RDS outages, broker outages, duplicate or poison messages, connection pool exhaustion, bad deployments, and the MVP's known lack of a transactional outbox.
 
-Concise AWS deployment answer:
+Autoscaling:
 
-I would containerize the Spring Boot service and run it on ECS Fargate behind an ALB, use RDS PostgreSQL as the source of truth, and use Amazon MQ if I want to preserve JMS semantics. I would put credentials in Secrets Manager, encrypt data and secrets with KMS, use IAM task roles, publish structured logs and Micrometer metrics to CloudWatch, and autoscale API tasks on request/latency signals and consumers on queue depth or message age. For a production version, I would add a transactional outbox and explicit processed-message inbox before relying on the async flow under broker failures.
+- Scale API tasks on request count, CPU, memory, and latency.
+- Scale consumers on queue depth, oldest message age, processing duration, and redeliveries.
+- Check RDS and broker saturation before blindly adding more tasks.
 
-## FIX and Trade Lifecycle
+Concise AWS answer:
 
-The project includes a deliberately lightweight FIX-style parser for educational use. It accepts simplified `tag=value` messages separated by SOH or `|`, supports a small New Order Single-like field set, and maps `35=D` messages into the same internal order request model used by the REST API.
+I would containerize the service and run it on ECS Fargate behind an ALB, use RDS PostgreSQL as the source of truth, and use Amazon MQ if I want JMS compatibility. I would put credentials in Secrets Manager, encrypt data with KMS, use IAM task roles, and send structured logs and Micrometer metrics to CloudWatch. Before production, I would add an outbox and processed-message inbox so broker failures and retries are operationally reliable.
 
-This is not a full FIX engine. It does not implement logon/logout, heartbeats, sequence recovery, resend requests, gap fills, BodyLength/CheckSum validation, counterparty sessions, or FIX dictionary certification behavior. A production integration would use a proven engine such as QuickFIX/J and keep business mapping separate from session management.
+## 14. FIX And Trade Lifecycle Discussion
 
-- `ClOrdID` maps to `clientOrderId`.
-- In this simplified demo, `SenderCompID` maps to `accountId`.
-- `Symbol` maps to `symbol`.
-- `Side=1` maps to `OrderSide.BUY`; `Side=2` maps to `OrderSide.SELL`.
-- `OrdType=1` maps to `OrderType.MARKET`; `OrdType=2` maps to `OrderType.LIMIT`.
-- `OrderQty` maps to `quantity`.
-- `Price` maps to `limitPrice` for limit orders and is ignored for market orders because the domain model rejects prices on market orders.
-- `OrdStatus` maps to `OrderStatus`.
-- `ExecType` maps to `ExecutionType`.
-- `ExecID` maps to `executionReportId`.
+Implemented FIX-style module:
 
-The parser and mapper are isolated from controllers, persistence, and JMS. That keeps the protocol translation testable and makes the boundary between transport/protocol concerns and domain/application behavior easy to explain.
+- `SimplifiedFixParser` parses `tag=value` fields separated by SOH or `|`.
+- `SimplifiedFixMessage` exposes required tag lookup.
+- `NewOrderSingleMapper` maps a simplified `35=D` New Order Single-like message into `SubmitOrderRequest`.
 
-The order lifecycle demonstrates accepted, rejected, partially filled, and filled states without requiring real market connectivity.
+Supported mappings:
+
+- `35=D` means New Order Single.
+- `11` maps to `clientOrderId`.
+- `49` maps to `accountId` in this simplified demo.
+- `55` maps to `symbol`.
+- `54=1` maps to `BUY`; `54=2` maps to `SELL`.
+- `40=1` maps to `MARKET`; `40=2` maps to `LIMIT`.
+- `38` maps to `quantity`.
+- `44` maps to `limitPrice` for limit orders.
+
+Trade lifecycle shown by the application:
+
+- Order starts as `NEW` in the domain.
+- REST submission accepts and persists it as `ACCEPTED`.
+- Async processing may leave it `ACCEPTED` with a no-fill execution report, or move it to `FILLED`.
+- A fill creates an `ExecutionReport` and a `Trade`.
+- `PARTIALLY_FILLED`, `CANCELLED`, and `REJECTED` are modeled but not fully exposed through all workflows yet.
+
+Important honesty:
+
+This is not a FIX engine. It does not implement sessions, sequence numbers, resend requests, heartbeats, BodyLength, CheckSum, dictionaries, counterparty state, or FIX certification behavior. In production, I would use QuickFIX/J for session-level FIX and keep this kind of mapping logic separate.
+
+## 15. Known Limitations And How I Would Improve It
+
+Known limitations:
+
+- No transactional outbox; event publication can be lost after DB commit if the process or broker fails.
+- No explicit processed-message inbox table for consumer idempotency diagnostics.
+- Account and instrument are modeled as identifiers, not persisted reference data with active/suspended status.
+- No authentication or authorization.
+- No order cancellation API.
+- No partial-fill simulation path yet, even though domain states include `PARTIALLY_FILLED`.
+- No list/search endpoints or pagination implementation yet.
+- No real market data, matching engine, or external venue integration.
+- No load tests or capacity sizing.
+- No production IaC for AWS deployment.
+- Simplified FIX parser is educational only.
+
+Improvements:
+
+- Add outbox and relay with retry state and dead-letter handling.
+- Add processed-message inbox table with message ID, status, attempt count, and timestamps.
+- Add account/instrument tables and validation.
+- Add cancel/replace workflows.
+- Add paginated search endpoints with composite indexes.
+- Add auth with role-based access.
+- Add realistic partial-fill and rejection scenarios.
+- Add load tests around API throughput, queue depth, DB locks, and p99 latency.
+- Add AWS IaC and deployment pipeline.
+
+## 16. Five Likely Interviewer Questions And Strong Answers
+
+### 1. Why did you separate domain objects from JPA entities?
+
+JPA entities are persistence concerns: they need annotations, no-arg constructors, mutable fields, and database-oriented shapes. The domain records are pure Java and encode business invariants such as order type/price rules, quantity validation, and valid state transitions. Keeping them separate makes the business model easier to test and explain, and prevents persistence framework requirements from driving domain design.
+
+### 2. How does idempotent order submission work?
+
+`POST /api/v1/orders` requires an `Idempotency-Key`. The service canonicalizes the business request fields and hashes them with SHA-256. It then tries to insert an `idempotency_records` row using PostgreSQL `ON CONFLICT DO NOTHING`. If the insert succeeds, this request owns the key and creates the order. If it fails, the service loads the existing record: same hash returns the same order resource and response status; different hash returns `409 Conflict`. Because async processing can update the order, a replay may show current state rather than the original `ACCEPTED` snapshot. This is database-backed, so it works across concurrent requests and multiple service instances.
+
+### 3. What happens if the same JMS message is delivered twice?
+
+The consumer expects at-least-once delivery. `OrderExecutionProcessor` derives a deterministic execution-report ID from the event ID and checks whether that report already exists. It then locks the order row with `PESSIMISTIC_WRITE` and checks again inside the serialized section. Trades also reference the execution report with a unique constraint, so a duplicate fill report cannot create a second trade for the same report. Duplicate events are acknowledged without creating duplicate terminal side effects.
+
+### 4. Where are your transaction boundaries, and what is the main reliability gap?
+
+Order submission is one database transaction for the order and idempotency record. JMS publication is registered with `afterCommit`, so the service does not publish an event for a rolled-back order. Message consumption is another transaction that writes the execution report, trade, and order status update together. The main reliability gap is direct after-commit publishing: a crash or broker outage after DB commit can leave an accepted order without an event. The production fix is a transactional outbox table and relay process.
+
+### 5. How would you investigate high p99 latency in this service?
+
+I would start by separating API latency from consumer processing latency. For APIs, I would check request metrics, error rates, thread dumps, Hikari pool wait time, RDS CPU/locks/slow queries, and GC logs. For consumers, I would check processing duration, queue depth, oldest message age, redeliveries, broker health, and database lock contention. If GC pauses align with spikes, I would inspect allocation pressure and heap sizing. If threads are waiting on JDBC or the broker, I would tune database queries, indexes, connection pools, or consumer concurrency before changing JVM flags.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the REST API contract for the current MVP implementation and the next planned API extensions.
+This document defines the REST API contract for the current MVP implementation and explicitly labels planned API extensions.
 
 ## API Principles
 
@@ -89,7 +89,7 @@ Successful response:
 
 Idempotent replay:
 
-- Same `Idempotency-Key` and same normalized request fingerprint returns the original logical response and response status.
+- Same `Idempotency-Key` and same normalized request fingerprint returns the same order resource and response status. Because asynchronous processing can update the order after the original submission, the replayed body may show the order's current state rather than the original `ACCEPTED` snapshot.
 - Same `Idempotency-Key` with a different request fingerprint returns `409 Conflict`.
 - Idempotent replay does not republish `OrderSubmittedEvent`.
 - Invalid or rejected requests do not publish `OrderSubmittedEvent`.
@@ -216,7 +216,7 @@ Returns a paged list of execution report summaries.
 
 `GET /api/v1/orders/{orderId}/trades`
 
-Returns trades created from filled or partially filled executions for an order.
+Returns trades created from filled executions for an order. The domain model also supports partial-fill reports, but the current simulator only creates full fills or no-fill accepted reports.
 
 Responses:
 

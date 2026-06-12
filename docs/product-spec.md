@@ -16,7 +16,7 @@ The MVP includes one Spring Boot service with:
 - Idempotent order submission using an `Idempotency-Key` header.
 - Idempotent message consumption using event IDs and deterministic execution-report/trade IDs.
 - A deterministic execution simulator that creates execution reports.
-- Trade creation when an order is `FILLED` or `PARTIALLY_FILLED`.
+- Trade creation when the current simulator fills an order. `PARTIALLY_FILLED` is modeled in the domain as a lifecycle extension, but the current simulator only produces full fills or no-fill accepted reports.
 - Order status updates based on execution outcome.
 - Structured logs with correlation IDs.
 - Test-first implementation with unit, slice, integration, and end-to-end tests.
@@ -46,7 +46,7 @@ The MVP includes one Spring Boot service with:
 8. Consumer verifies the message has not already been processed.
 9. Consumer simulates execution.
 10. System creates an execution report.
-11. System creates a trade record for `FILLED` or `PARTIALLY_FILLED` executions.
+11. System creates a trade record for filled executions.
 12. System updates order status.
 13. Client retrieves order, execution report, and trade state via REST.
 
@@ -54,8 +54,8 @@ The MVP includes one Spring Boot service with:
 
 The MVP domain includes:
 
-- `Account`: owner of orders and trades.
-- `Instrument`: tradable symbol and reference data.
+- `Account`: represented by `accountId` on orders and trades in the MVP; a persisted account table is planned.
+- `Instrument`: represented by `symbol` on orders and trades in the MVP; a persisted instrument table is planned.
 - `Order`: client instruction to buy or sell an instrument.
 - `OrderSide`: `BUY` or `SELL`.
 - `OrderType`: `MARKET` or `LIMIT`.
@@ -71,17 +71,17 @@ The MVP domain includes:
 - The system must reject malformed or invalid orders with production-style error responses.
 - The system must persist accepted orders before publishing the JMS event.
 - The system must publish exactly one logical order-submitted event per idempotent order submission.
-- The system must safely return the original response for repeated requests with the same `Idempotency-Key` and equivalent payload.
+- The system must safely return the same order resource and response status for repeated requests with the same `Idempotency-Key` and equivalent payload.
 - The system must reject reuse of the same `Idempotency-Key` with a materially different payload.
 - The consumer must tolerate duplicate JMS delivery without creating duplicate execution reports or trades.
 - The execution simulator must be deterministic enough for tests.
-- Filled and partially filled orders must produce trade records.
+- Filled orders must produce trade records. Partial-fill trade creation is modeled but not produced by the current simulator.
 - Clients must be able to query orders, execution reports, and trades.
 - Logs must carry a correlation ID across REST entry, persistence, message publication, and message consumption where practical.
 
 ## Nonfunctional Requirements
 
-- REST API correctness: clear resources, status codes, validation failures, and pagination.
+- REST API correctness: clear resources, status codes, and validation failures. Pagination is planned for future list endpoints.
 - SQL persistence: normalized tables, constraints, indexes, and transaction-aware writes.
 - JMS async messaging: durable queue, explicit destination names, retry-ready listener configuration, and DLQ-ready design.
 - Idempotent order submission: duplicate client retries must not create duplicate orders.

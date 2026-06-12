@@ -27,8 +27,6 @@ Cover pure Java behavior without Spring:
 
 - Order validation rules.
 - `MARKET` and `LIMIT` price rules.
-- Filled and remaining quantity calculations.
-- Average execution price calculation.
 - Allowed and disallowed `OrderStatus` transitions.
 - Trade creation rules from execution reports.
 - Deterministic execution simulation outcomes.
@@ -43,7 +41,7 @@ Tools:
 Cover orchestration with mocked dependencies where useful:
 
 - Submit order creates idempotency record.
-- Duplicate idempotency key with same fingerprint returns original result.
+- Duplicate idempotency key with same fingerprint returns the same order resource and response status.
 - Duplicate idempotency key with different fingerprint fails with conflict.
 - Accepted order is stored before event publication is requested.
 - Messaging failure behavior is explicit and tested according to the chosen outbox or direct-publish design.
@@ -84,7 +82,7 @@ Run against PostgreSQL Testcontainers:
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
 - Pessimistic row locking and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
-- Query filters and pagination work for orders, execution reports, and trades.
+- Current repository query methods support order, execution-report, and trade lookup by ID/order ID. List filters and pagination are planned extensions.
 - Index-backed query paths are documented where relevant.
 
 Tools:
@@ -112,7 +110,7 @@ Exercise the full flow:
 2. Wait for asynchronous processing using deterministic polling, not arbitrary sleeps.
 3. Retrieve order and assert final status.
 4. Retrieve execution reports.
-5. Retrieve trades when filled or partially filled.
+5. Retrieve trades when filled.
 6. Assert correlation ID appears in response and logs where feasible.
 
 ## Test Data Strategy

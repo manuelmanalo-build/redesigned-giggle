@@ -37,7 +37,7 @@ The exact package names may evolve, but framework concerns should not leak into 
 1. `OrderController` receives `POST /api/v1/orders`.
 2. Correlation middleware resolves `X-Correlation-Id` or creates one.
 3. API validation checks JSON shape and simple constraints.
-4. `SubmitOrderService` validates domain rules.
+4. `OrderApplicationService` validates domain rules.
 5. The service validates domain rules and claims an `IdempotencyRecord` with a PostgreSQL `ON CONFLICT DO NOTHING` insert.
 6. Within a database transaction, the service stores the order and records the intended response.
 7. The service registers an after-commit publication of `OrderSubmittedEvent`.
@@ -102,7 +102,7 @@ Rules:
 
 - First use creates a record with request fingerprint and response reference.
 - Concurrent first use is guarded by the `idempotency_records` primary key and an `ON CONFLICT DO NOTHING` claim insert.
-- Repeated use with the same fingerprint returns the original logical response.
+- Repeated use with the same fingerprint returns the same order resource and response status. Because the async consumer may have updated the order, the replayed body can reflect current order state.
 - Repeated use with a different fingerprint returns `409 Conflict`.
 - Idempotency records should have a creation timestamp and final status.
 
