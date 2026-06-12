@@ -11,8 +11,10 @@ The product is for interview preparation. It should be realistic enough to discu
 The MVP includes one Spring Boot service with:
 
 - REST APIs for order submission and read models.
+- Paginated operational search APIs for orders, execution reports, and trades.
 - REST APIs for account and instrument reference-data management.
 - PostgreSQL persistence for accounts, instruments, orders, execution reports, trades, idempotency records, transactional outbox events, and processed-message inbox diagnostics.
+- Composite SQL indexes for common operational search patterns.
 - JMS publishing and consuming with ActiveMQ Artemis.
 - Transactional outbox relay for reliable order-submitted event publication and database-visible retry state.
 - Idempotent order submission using an `Idempotency-Key` header.
@@ -88,7 +90,7 @@ The MVP domain includes:
 
 ## Nonfunctional Requirements
 
-- REST API correctness: clear resources, status codes, and validation failures. Pagination is planned for future list endpoints.
+- REST API correctness: clear resources, status codes, validation failures, and paginated operational search endpoints.
 - SQL persistence: normalized tables, constraints, indexes, and transaction-aware writes.
 - JMS async messaging: durable queue, explicit destination names, retry-ready listener configuration, and DLQ-ready design.
 - Idempotent order submission: duplicate client retries must not create duplicate orders.

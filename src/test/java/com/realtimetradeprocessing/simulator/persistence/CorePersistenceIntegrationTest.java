@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -330,6 +331,41 @@ class CorePersistenceIntegrationTest {
             Timestamp.from(now)
         ))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void createsCompositeSearchIndexes() {
+        List<String> indexNames = jdbcTemplate.queryForList(
+            """
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname IN (
+                    'idx_orders_account_id_created_at_desc',
+                    'idx_orders_symbol_created_at_desc',
+                    'idx_orders_status_created_at_desc',
+                    'idx_orders_account_id_status_created_at_desc',
+                    'idx_execution_reports_order_id_created_at_desc',
+                    'idx_execution_reports_execution_type_created_at_desc',
+                    'idx_trades_account_id_created_at_desc',
+                    'idx_trades_symbol_created_at_desc',
+                    'idx_trades_order_id_created_at_desc'
+                  )
+                """,
+            String.class
+        );
+
+        assertThat(indexNames).containsExactlyInAnyOrder(
+            "idx_orders_account_id_created_at_desc",
+            "idx_orders_symbol_created_at_desc",
+            "idx_orders_status_created_at_desc",
+            "idx_orders_account_id_status_created_at_desc",
+            "idx_execution_reports_order_id_created_at_desc",
+            "idx_execution_reports_execution_type_created_at_desc",
+            "idx_trades_account_id_created_at_desc",
+            "idx_trades_symbol_created_at_desc",
+            "idx_trades_order_id_created_at_desc"
+        );
     }
 
     @Test

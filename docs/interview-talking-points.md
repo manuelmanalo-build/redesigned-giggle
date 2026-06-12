@@ -139,6 +139,7 @@ PostgreSQL is the source of truth. Flyway migrations define and harden the schem
 - `V6__create_processed_messages.sql` creates the consumer inbox table and diagnostic indexes.
 - `V7__create_reference_data.sql` creates `accounts` and `instruments` with seed rows for active and inactive cases.
 - `V8__allow_replaced_execution_reports.sql` extends execution-report constraints for replace audit records.
+- `V9__add_search_composite_indexes.sql` adds composite indexes for paginated operational searches.
 
 Important constraints:
 
@@ -171,7 +172,15 @@ Transaction boundaries:
 
 Indexing discussion:
 
-The indexes match current and planned query paths rather than every possible column. The remaining gap is composite/pagination indexes such as `(account_id, created_at)` or `(status, created_at)` once list endpoints are implemented.
+The indexes match current query paths rather than every possible column. Search endpoints default to `createdAt DESC`, so indexes such as `(account_id, created_at DESC)`, `(symbol, created_at DESC)`, `(status, created_at DESC)`, `(account_id, status, created_at DESC)`, `(execution_type, created_at DESC)`, and `(order_id, created_at DESC)` support selective filters plus chronological pagination. This avoids indexing every filter combination while covering realistic operational views.
+
+Pagination tradeoff:
+
+The API uses page/size pagination with a max page size of `100` because it is simple for demos and admin-style views. For very large tables or deep scrolling, I would add keyset pagination using `(created_at, id)` and return a cursor to avoid expensive offsets.
+
+Slow SQL investigation:
+
+I would start with application metrics and logs to identify the endpoint and parameters, then run `EXPLAIN (ANALYZE, BUFFERS)` for the generated SQL against representative data. I would check whether the filter matches an index prefix, whether PostgreSQL is scanning too many rows, whether statistics are stale, and whether sort or pagination is spilling. Then I would decide between query changes, a more selective composite index, cursor pagination, or data partitioning.
 
 ## 9. JMS/Messaging Discussion
 

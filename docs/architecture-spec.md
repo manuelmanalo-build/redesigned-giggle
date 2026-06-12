@@ -216,13 +216,24 @@ Current indexes:
 - `trades(order_id)`
 - `trades(execution_report_id)`
 - `idempotency_records(idempotency_key)`
+- `orders(account_id, created_at DESC)`
+- `orders(symbol, created_at DESC)`
+- `orders(status, created_at DESC)`
+- `orders(account_id, status, created_at DESC)`
+- `execution_reports(order_id, created_at DESC)`
+- `execution_reports(execution_type, created_at DESC)`
+- `trades(account_id, created_at DESC)`
+- `trades(symbol, created_at DESC)`
+- `trades(order_id, created_at DESC)`
 - `outbox_events(status, next_attempt_at, created_at)`
 - `outbox_events(aggregate_type, aggregate_id)`
 - `processed_messages(status)`
 - `processed_messages(aggregate_id)`
 - `processed_messages(consumer_name, status)`
 
-Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once search endpoints exist.
+Search endpoints use page/size pagination with a maximum page size of `100`, default sorting by `created_at DESC`, and whitelisted sort fields only. The composite indexes are intentionally aligned to common operational access patterns: account order history, symbol activity, status queues, execution-report history by order/type, and trade history by account/symbol/order.
+
+Page/size pagination is simple to explain and works well for the MVP. A high-volume production feed would likely add cursor/keyset pagination using `(created_at, id)` so deep pages do not require large offsets.
 
 Reference-data validation:
 

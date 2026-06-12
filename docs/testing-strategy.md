@@ -61,6 +61,7 @@ Cover REST behavior:
 
 - `POST /api/v1/orders` returns `201 Created` for valid accepted requests.
 - `POST /api/v1/orders/{orderId}/cancel` and `/replace` enforce `Idempotency-Key`.
+- `GET /api/v1/orders`, `/execution-reports`, and `/trades` return paginated search results.
 - Missing `Idempotency-Key` returns validation error.
 - Invalid enum values return `400 Bad Request`.
 - Invalid quantity or price returns field errors.
@@ -70,6 +71,7 @@ Cover REST behavior:
 - REST responses include an `X-Correlation-Id` response header.
 - Global exception handling covers validation, domain exceptions, idempotency conflicts, and not-found responses.
 - Conflict handling covers invalid cancel/replace lifecycle states.
+- Search validation covers max page size, unsupported sort fields, invalid enum filters, and invalid date ranges.
 - `/actuator/health` and custom Micrometer metrics are accessible in integration tests.
 
 Tools:
@@ -107,6 +109,7 @@ Run against embedded Artemis or an Artemis Testcontainer:
 - API integration tests verify unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are hard rejected without order/idempotency/outbox persistence.
 - API integration tests verify account/instrument reference data can be created, updated, retrieved, and then used by order submission.
 - API integration tests verify cancel and replace success paths, terminal-state conflicts, partial-fill quantity guards, idempotent replay, and execution-report creation.
+- API integration tests verify search filters, date ranges, sorting, pagination metadata, and validation failures.
 - `OutboxRelayService` integration tests verify pending event publication, successful `PUBLISHED` marking, retry state on publish failure, max-attempt `FAILED` behavior, and skipping already-published rows.
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
 - A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.

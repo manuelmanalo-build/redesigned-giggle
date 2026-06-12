@@ -147,7 +147,7 @@ The indexes match current and planned access patterns:
 - `trades.execution_report_id` supports the one-report-to-one-trade invariant.
 - `idempotency_records.idempotency_key` makes the retry path explicit, even though the primary key already provides that access path.
 
-If I added list endpoints, I would add composite indexes like `(account_id, created_at)` or `(status, created_at)` to support pagination efficiently.
+For operational list endpoints, the schema has composite indexes like `(account_id, created_at DESC)`, `(status, created_at DESC)`, and `(order_id, created_at DESC)` so common filtered searches can still return newest-first pages efficiently.
 
 ## 8. 2-Minute JVM/GC Talking Point
 

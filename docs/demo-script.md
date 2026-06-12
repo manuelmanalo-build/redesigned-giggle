@@ -232,7 +232,36 @@ Expected result:
 - Filled orders should each have one trade.
 - Trade responses include `tradeId`, `orderId`, `executionReportId`, `accountId`, `symbol`, `side`, `quantity`, `price`, and `createdAt`.
 
-## 10. Demonstrate Replace And Cancel
+## 10. Search Operational Views
+
+Search orders for the demo account:
+
+```powershell
+curl.exe -s "$BaseUrl/api/v1/orders?accountId=ACC-001&symbol=AAPL&page=0&size=20&sortBy=createdAt&sortDirection=desc" |
+  ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+Search execution reports for the market order:
+
+```powershell
+curl.exe -s "$BaseUrl/api/v1/execution-reports?orderId=$MarketOrderId&page=0&size=20" |
+  ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+Search trades for the demo account and symbol:
+
+```powershell
+curl.exe -s "$BaseUrl/api/v1/trades?accountId=ACC-001&symbol=AAPL&page=0&size=20" |
+  ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+Expected result:
+
+- Responses include `items`, `page`, `size`, `totalElements`, and `totalPages`.
+- Default sorting is newest first by `createdAt`.
+- Page size is capped at `100`.
+
+## 11. Demonstrate Replace And Cancel
 
 Submit a non-marketable limit order that should remain open at the default simulated market price:
 
@@ -301,7 +330,7 @@ Expected result:
 - Cancel returns `200 OK` with status `CANCELLED`.
 - Execution reports include `REPLACED` and `CANCELLED`.
 
-## 11. Demonstrate Idempotency With The Same Idempotency Key
+## 12. Demonstrate Idempotency With The Same Idempotency Key
 
 Submit the same market order body again with the same `Idempotency-Key`:
 
@@ -320,7 +349,7 @@ Expected result:
 - The `orderId` should match `$MarketOrderId`.
 - The event is not republished for the replay.
 
-## 12. Demonstrate Conflict With The Same Idempotency Key And Different Body
+## 13. Demonstrate Conflict With The Same Idempotency Key And Different Body
 
 Change the request body but reuse the same market idempotency key:
 
@@ -349,7 +378,7 @@ Expected result:
 - HTTP status is `409 Conflict`.
 - Response body uses the standard error shape and includes `errorCode`, `message`, `path`, and `correlationId`.
 
-## 13. Show Health And Metrics Endpoints
+## 14. Show Health And Metrics Endpoints
 
 Health:
 
@@ -387,7 +416,7 @@ Message processing duration metric:
 curl.exe -s "$BaseUrl/actuator/metrics/trade.messages.processing.duration" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 ```
 
-## 14. Stop Local Dependencies
+## 15. Stop Local Dependencies
 
 When finished:
 

@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system accepts orders through REST, validates and persists them, writes order-submitted events to a transactional outbox, relays those events to JMS, processes them asynchronously, simulates executions, creates execution reports and trades, supports cancel/replace workflows, updates order state, and exposes query APIs.
 
-The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, transactional outbox publication, processed-message inbox diagnostics, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
+The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval/search APIs, idempotency handling, transactional outbox publication, processed-message inbox diagnostics, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
 
 ## Project Summary
 
@@ -26,7 +26,7 @@ The MVP models:
 - Execution report audit records for cancel and replace operations.
 - Trade creation for filled orders. Partial-fill states are modeled as a planned lifecycle extension.
 - Order status updates.
-- REST reads for orders, execution reports, and trades.
+- REST reads and paginated search for orders, execution reports, and trades.
 - Correlation IDs and structured logging.
 
 ## Target Interview Requirements

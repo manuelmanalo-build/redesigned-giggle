@@ -360,20 +360,51 @@ Current response example:
 
 `GET /api/v1/orders`
 
-Planned, not implemented yet.
+Returns a paginated operational view of orders. Filters are combined with `AND`. Default sort is `createdAt DESC`.
 
 Query parameters:
 
 - `accountId`
 - `symbol`
 - `status`
+- `side`
+- `type`
 - `clientOrderId`
-- `from`
-- `to`
-- `page`
-- `size`
+- `createdFrom`: ISO-8601 timestamp, inclusive.
+- `createdTo`: ISO-8601 timestamp, inclusive.
+- `page`: zero-based page number. Default `0`.
+- `size`: page size from `1` to `100`. Default `20`.
+- `sortBy`: allowed values are `createdAt`, `updatedAt`, `clientOrderId`, `accountId`, `symbol`, and `status`. Snake-case aliases such as `created_at` are accepted.
+- `sortDirection`: `asc` or `desc`. Default `desc`.
 
-Returns a paged list of order summaries.
+Response:
+
+```json
+{
+  "items": [
+    {
+      "orderId": "b19a2c07-4cd8-4f39-bd2a-5a785dd4697f",
+      "clientOrderId": "CLIENT-123",
+      "accountId": "ACC-001",
+      "symbol": "AAPL",
+      "side": "BUY",
+      "type": "LIMIT",
+      "status": "ACCEPTED",
+      "quantity": 100,
+      "limitPrice": 185.50,
+      "filledQuantity": 0,
+      "createdAt": "2026-06-09T15:30:00Z",
+      "updatedAt": "2026-06-09T15:30:00Z"
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 123,
+  "totalPages": 7
+}
+```
+
+Invalid enum values, invalid dates, unsupported sort fields, negative page numbers, or page sizes above `100` return `400 Bad Request` with `VALIDATION_ERROR`.
 
 ### Get Execution Reports for Order
 
@@ -414,20 +445,23 @@ Responses:
 
 `GET /api/v1/execution-reports`
 
-Planned, not implemented yet.
+Returns a paginated operational view of execution reports. Filters are combined with `AND`. Default sort is `createdAt DESC`.
 
 Query parameters:
 
 - `orderId`
-- `accountId`
-- `symbol`
 - `executionType`
-- `from`
-- `to`
-- `page`
-- `size`
+- `orderStatus`
+- `createdFrom`: ISO-8601 timestamp, inclusive.
+- `createdTo`: ISO-8601 timestamp, inclusive.
+- `page`: zero-based page number. Default `0`.
+- `size`: page size from `1` to `100`. Default `20`.
+- `sortBy`: allowed values are `createdAt`, `executionType`, and `orderStatus`. Snake-case aliases are accepted.
+- `sortDirection`: `asc` or `desc`. Default `desc`.
 
-Returns a paged list of execution report summaries.
+Returns `PageResponse<ExecutionReportResponse>`.
+
+Invalid enum values, invalid dates, unsupported sort fields, negative page numbers, or page sizes above `100` return `400 Bad Request` with `VALIDATION_ERROR`.
 
 ### Get Trades for Order
 
@@ -469,7 +503,7 @@ Responses:
 
 `GET /api/v1/trades`
 
-Planned, not implemented yet.
+Returns a paginated operational view of trades. Filters are combined with `AND`. Default sort is `createdAt DESC`.
 
 Query parameters:
 
@@ -477,12 +511,16 @@ Query parameters:
 - `accountId`
 - `symbol`
 - `side`
-- `from`
-- `to`
-- `page`
-- `size`
+- `createdFrom`: ISO-8601 timestamp, inclusive.
+- `createdTo`: ISO-8601 timestamp, inclusive.
+- `page`: zero-based page number. Default `0`.
+- `size`: page size from `1` to `100`. Default `20`.
+- `sortBy`: allowed values are `createdAt`, `accountId`, `symbol`, and `side`. Snake-case aliases are accepted.
+- `sortDirection`: `asc` or `desc`. Default `desc`.
 
-Returns a paged list of trade summaries.
+Returns `PageResponse<TradeResponse>`.
+
+Invalid enum values, invalid dates, unsupported sort fields, negative page numbers, or page sizes above `100` return `400 Bad Request` with `VALIDATION_ERROR`.
 
 ### Health and Info
 

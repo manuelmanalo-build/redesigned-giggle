@@ -850,6 +850,218 @@ class OrderApiIntegrationTest {
     }
 
     @Test
+    void searchesOrdersByAccountIdSymbolStatusAndDateRange() throws Exception {
+        saveOrder(
+            "search-orders-match",
+            "SEARCH-CLIENT-1",
+            "SEARCH-ACC-1",
+            "SRCHA",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T10:00:00Z")
+        );
+        saveOrder(
+            "search-orders-other-account",
+            "SEARCH-CLIENT-2",
+            "SEARCH-ACC-2",
+            "SRCHA",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T10:05:00Z")
+        );
+        saveOrder(
+            "search-orders-other-status",
+            "SEARCH-CLIENT-3",
+            "SEARCH-ACC-1",
+            "SRCHA",
+            OrderSide.BUY,
+            OrderStatus.CANCELLED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T10:10:00Z")
+        );
+
+        mockMvc.perform(get("/api/v1/orders")
+                .param("accountId", "SEARCH-ACC-1")
+                .param("symbol", "srcha")
+                .param("status", "ACCEPTED")
+                .param("createdFrom", "2026-06-12T09:59:00Z")
+                .param("createdTo", "2026-06-12T10:01:00Z"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(1))
+            .andExpect(jsonPath("$.items[0].orderId").value("search-orders-match"))
+            .andExpect(jsonPath("$.items[0].accountId").value("SEARCH-ACC-1"))
+            .andExpect(jsonPath("$.page").value(0))
+            .andExpect(jsonPath("$.size").value(20))
+            .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
+    void searchesOrdersWithPaginationAndControlledSort() throws Exception {
+        saveOrder(
+            "search-orders-page-1",
+            "SEARCH-PAGE-1",
+            "SEARCH-PAGE-ACC",
+            "SRCHP",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T11:00:00Z")
+        );
+        saveOrder(
+            "search-orders-page-2",
+            "SEARCH-PAGE-2",
+            "SEARCH-PAGE-ACC",
+            "SRCHP",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T11:01:00Z")
+        );
+        saveOrder(
+            "search-orders-page-3",
+            "SEARCH-PAGE-3",
+            "SEARCH-PAGE-ACC",
+            "SRCHP",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            Instant.parse("2026-06-12T11:02:00Z")
+        );
+
+        mockMvc.perform(get("/api/v1/orders")
+                .param("accountId", "SEARCH-PAGE-ACC")
+                .param("page", "0")
+                .param("size", "2")
+                .param("sortBy", "createdAt")
+                .param("sortDirection", "asc"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(2))
+            .andExpect(jsonPath("$.items[0].orderId").value("search-orders-page-1"))
+            .andExpect(jsonPath("$.items[1].orderId").value("search-orders-page-2"))
+            .andExpect(jsonPath("$.page").value(0))
+            .andExpect(jsonPath("$.size").value(2))
+            .andExpect(jsonPath("$.totalElements").value(3))
+            .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    void rejectsOversizedSearchPageAndUnsupportedSortField() throws Exception {
+        mockMvc.perform(get("/api/v1/orders")
+                .param("size", "101"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+
+        mockMvc.perform(get("/api/v1/orders")
+                .param("sortBy", "raw_sql"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
+            .andExpect(jsonPath("$.message").value("Unsupported sort field: raw_sql"));
+    }
+
+    @Test
+    void rejectsInvalidSearchDateRangeAndEnumFilter() throws Exception {
+        mockMvc.perform(get("/api/v1/orders")
+                .param("createdFrom", "2026-06-12T11:00:00Z")
+                .param("createdTo", "2026-06-12T10:00:00Z"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
+            .andExpect(jsonPath("$.message").value("createdFrom must be before or equal to createdTo"));
+
+        mockMvc.perform(get("/api/v1/orders")
+                .param("status", "NOT_A_STATUS"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
+            .andExpect(jsonPath("$.message").value("Invalid value for parameter: status"));
+    }
+
+    @Test
+    void searchesExecutionReportsByOrderTypeStatusAndDateRange() throws Exception {
+        saveOrder("search-report-order", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        saveExecutionReport(
+            "search-report-match",
+            "search-report-order",
+            ExecutionType.REPLACED,
+            OrderStatus.ACCEPTED,
+            Instant.parse("2026-06-12T12:00:00Z")
+        );
+        saveExecutionReport(
+            "search-report-other-type",
+            "search-report-order",
+            ExecutionType.CANCELLED,
+            OrderStatus.CANCELLED,
+            Instant.parse("2026-06-12T12:05:00Z")
+        );
+
+        mockMvc.perform(get("/api/v1/execution-reports")
+                .param("orderId", "search-report-order")
+                .param("executionType", "REPLACED")
+                .param("orderStatus", "ACCEPTED")
+                .param("createdFrom", "2026-06-12T11:59:00Z")
+                .param("createdTo", "2026-06-12T12:01:00Z"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(1))
+            .andExpect(jsonPath("$.items[0].executionReportId").value("search-report-match"))
+            .andExpect(jsonPath("$.items[0].executionType").value("REPLACED"))
+            .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
+    void searchesTradesByAccountSymbolSideAndDateRange() throws Exception {
+        saveOrder("search-trade-order-1", OrderStatus.FILLED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 100);
+        saveOrder("search-trade-order-2", OrderStatus.FILLED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 100);
+        saveTrade(
+            "search-trade-match",
+            "search-trade-order-1",
+            "search-trade-report-1",
+            "SEARCH-TRADE-ACC",
+            "SRCHT",
+            OrderSide.BUY,
+            Instant.parse("2026-06-12T13:00:00Z")
+        );
+        saveTrade(
+            "search-trade-other-symbol",
+            "search-trade-order-2",
+            "search-trade-report-2",
+            "SEARCH-TRADE-ACC",
+            "OTHER",
+            OrderSide.BUY,
+            Instant.parse("2026-06-12T13:05:00Z")
+        );
+
+        mockMvc.perform(get("/api/v1/trades")
+                .param("accountId", "SEARCH-TRADE-ACC")
+                .param("symbol", "srcht")
+                .param("side", "BUY")
+                .param("createdFrom", "2026-06-12T12:59:00Z")
+                .param("createdTo", "2026-06-12T13:01:00Z"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(1))
+            .andExpect(jsonPath("$.items[0].tradeId").value("search-trade-match"))
+            .andExpect(jsonPath("$.items[0].symbol").value("SRCHT"))
+            .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
     void exposesHealthAndCustomMetrics() throws Exception {
         clearInvocations(orderEventPublisher);
 
@@ -942,6 +1154,86 @@ class OrderApiIntegrationTest {
             filledQuantity,
             now,
             now
+        ));
+    }
+
+    private OrderEntity saveOrder(
+        String orderId,
+        String clientOrderId,
+        String accountId,
+        String symbol,
+        OrderSide side,
+        OrderStatus status,
+        OrderType type,
+        long quantity,
+        BigDecimal limitPrice,
+        long filledQuantity,
+        Instant createdAt
+    ) {
+        return orderRepository.saveAndFlush(new OrderEntity(
+            orderId,
+            clientOrderId,
+            accountId,
+            symbol,
+            side,
+            type,
+            status,
+            quantity,
+            limitPrice,
+            filledQuantity,
+            createdAt,
+            createdAt
+        ));
+    }
+
+    private ExecutionReportEntity saveExecutionReport(
+        String executionReportId,
+        String orderId,
+        ExecutionType executionType,
+        OrderStatus orderStatus,
+        Instant createdAt
+    ) {
+        return executionReportRepository.saveAndFlush(new ExecutionReportEntity(
+            executionReportId,
+            orderId,
+            executionType,
+            orderStatus,
+            null,
+            null,
+            "search report",
+            createdAt
+        ));
+    }
+
+    private TradeEntity saveTrade(
+        String tradeId,
+        String orderId,
+        String executionReportId,
+        String accountId,
+        String symbol,
+        OrderSide side,
+        Instant createdAt
+    ) {
+        executionReportRepository.saveAndFlush(new ExecutionReportEntity(
+            executionReportId,
+            orderId,
+            ExecutionType.FILL,
+            OrderStatus.FILLED,
+            100L,
+            BigDecimal.valueOf(185.50),
+            "search trade fill",
+            createdAt
+        ));
+        return tradeRepository.saveAndFlush(new TradeEntity(
+            tradeId,
+            orderId,
+            executionReportId,
+            accountId,
+            symbol,
+            side,
+            100,
+            BigDecimal.valueOf(185.50),
+            createdAt
         ));
     }
 

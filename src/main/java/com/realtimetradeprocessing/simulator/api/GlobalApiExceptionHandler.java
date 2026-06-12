@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -38,6 +39,7 @@ public class GlobalApiExceptionHandler {
         MissingRequestHeaderException.class,
         ConstraintViolationException.class,
         HttpMessageNotReadableException.class,
+        MethodArgumentTypeMismatchException.class,
         DomainException.class,
         IllegalArgumentException.class
     })
@@ -96,6 +98,9 @@ public class GlobalApiExceptionHandler {
         }
         if (exception instanceof HttpMessageNotReadableException) {
             return "Malformed or invalid JSON request";
+        }
+        if (exception instanceof MethodArgumentTypeMismatchException typeMismatchException) {
+            return "Invalid value for parameter: " + typeMismatchException.getName();
         }
         return exception.getMessage();
     }
