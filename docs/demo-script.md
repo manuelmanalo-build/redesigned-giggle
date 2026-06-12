@@ -47,7 +47,64 @@ $MarketKey = "demo-market-$RunId"
 $LimitKey = "demo-limit-$RunId"
 ```
 
-## 4. Submit A Valid Market Order
+## 4. View And Manage Reference Data
+
+List seeded accounts and instruments:
+
+```powershell
+curl.exe -s "$BaseUrl/api/v1/accounts" | ConvertFrom-Json | ConvertTo-Json -Depth 5
+curl.exe -s "$BaseUrl/api/v1/instruments" | ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+Create and update demo reference data:
+
+```powershell
+$DemoAccountId = "DEMO-ACC-$RunId"
+$DemoSymbol = "ZZ$RunId".ToUpper()
+
+$CreateAccountBody = @"
+{
+  "accountId": "$DemoAccountId",
+  "displayName": "Demo Managed Account",
+  "status": "ACTIVE"
+}
+"@
+
+curl.exe -s -X POST "$BaseUrl/api/v1/accounts" `
+  -H "Content-Type: application/json" `
+  --data $CreateAccountBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+
+$CreateInstrumentBody = @"
+{
+  "symbol": "$DemoSymbol",
+  "name": "Demo Managed Equity",
+  "assetClass": "EQUITY",
+  "status": "HALTED",
+  "tickSize": 0.01
+}
+"@
+
+curl.exe -s -X POST "$BaseUrl/api/v1/instruments" `
+  -H "Content-Type: application/json" `
+  --data $CreateInstrumentBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+
+$UpdateInstrumentBody = @"
+{
+  "name": "Demo Managed Equity",
+  "assetClass": "EQUITY",
+  "status": "ACTIVE",
+  "tickSize": 0.01
+}
+"@
+
+curl.exe -s -X PUT "$BaseUrl/api/v1/instruments/$DemoSymbol" `
+  -H "Content-Type: application/json" `
+  --data $UpdateInstrumentBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+The order examples below use seeded `ACC-001` and `AAPL` to keep the main trade-processing flow predictable.
+
+## 5. Submit A Valid Market Order
 
 Market orders in the current simulator fill completely at the configured simulated market price, which defaults to `100.00`.
 
@@ -55,7 +112,7 @@ Market orders in the current simulator fill completely at the configured simulat
 $MarketBody = @"
 {
   "clientOrderId": "DEMO-MARKET-$RunId",
-  "accountId": "ACC-DEMO",
+  "accountId": "ACC-001",
   "symbol": "AAPL",
   "side": "BUY",
   "type": "MARKET",
@@ -80,7 +137,7 @@ Expected result:
 - Initial order status is `ACCEPTED`.
 - Async JMS processing should later update it to `FILLED`.
 
-## 5. Submit A Valid Limit Order
+## 6. Submit A Valid Limit Order
 
 This limit buy order should fill because the limit price `105.00` is above the default simulated market price `100.00`.
 
@@ -88,7 +145,7 @@ This limit buy order should fill because the limit price `105.00` is above the d
 $LimitBody = @"
 {
   "clientOrderId": "DEMO-LIMIT-$RunId",
-  "accountId": "ACC-DEMO",
+  "accountId": "ACC-001",
   "symbol": "MSFT",
   "side": "BUY",
   "type": "LIMIT",
@@ -114,7 +171,7 @@ Wait briefly for asynchronous processing:
 Start-Sleep -Seconds 2
 ```
 
-## 6. Retrieve Order Status
+## 7. Retrieve Order Status
 
 Retrieve the market order:
 
@@ -134,7 +191,7 @@ Expected result:
 - The marketable limit order should become `FILLED`.
 - If a response still shows `ACCEPTED`, wait another second and run the GET again.
 
-## 7. Retrieve Execution Reports
+## 8. Retrieve Execution Reports
 
 Market order execution reports:
 
@@ -153,7 +210,7 @@ Expected result:
 - Filled orders should have a `FILL` execution report.
 - The report includes `executedQuantity`, `executionPrice`, `orderStatus`, and `createdAt`.
 
-## 8. Retrieve Trades
+## 9. Retrieve Trades
 
 Market order trades:
 
@@ -172,7 +229,7 @@ Expected result:
 - Filled orders should each have one trade.
 - Trade responses include `tradeId`, `orderId`, `executionReportId`, `accountId`, `symbol`, `side`, `quantity`, `price`, and `createdAt`.
 
-## 9. Demonstrate Idempotency With The Same Idempotency Key
+## 10. Demonstrate Idempotency With The Same Idempotency Key
 
 Submit the same market order body again with the same `Idempotency-Key`:
 
@@ -191,7 +248,7 @@ Expected result:
 - The `orderId` should match `$MarketOrderId`.
 - The event is not republished for the replay.
 
-## 10. Demonstrate Conflict With The Same Idempotency Key And Different Body
+## 11. Demonstrate Conflict With The Same Idempotency Key And Different Body
 
 Change the request body but reuse the same market idempotency key:
 
@@ -199,7 +256,7 @@ Change the request body but reuse the same market idempotency key:
 $ConflictBody = @"
 {
   "clientOrderId": "DEMO-MARKET-$RunId",
-  "accountId": "ACC-DEMO",
+  "accountId": "ACC-001",
   "symbol": "AAPL",
   "side": "BUY",
   "type": "MARKET",
@@ -220,7 +277,7 @@ Expected result:
 - HTTP status is `409 Conflict`.
 - Response body uses the standard error shape and includes `errorCode`, `message`, `path`, and `correlationId`.
 
-## 11. Show Health And Metrics Endpoints
+## 12. Show Health And Metrics Endpoints
 
 Health:
 
@@ -258,7 +315,7 @@ Message processing duration metric:
 curl.exe -s "$BaseUrl/actuator/metrics/trade.messages.processing.duration" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 ```
 
-## 12. Stop Local Dependencies
+## 13. Stop Local Dependencies
 
 When finished:
 

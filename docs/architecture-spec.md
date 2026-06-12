@@ -39,23 +39,24 @@ The exact package names may evolve, but framework concerns should not leak into 
 2. Correlation middleware resolves `X-Correlation-Id` or creates one.
 3. API validation checks JSON shape and simple constraints.
 4. `OrderApplicationService` validates domain rules.
-5. The service validates domain rules and claims an `IdempotencyRecord` with a PostgreSQL `ON CONFLICT DO NOTHING` insert.
-6. Within one database transaction, the service stores the order, records the intended response, and inserts an `outbox_events` row containing `OrderSubmittedEvent`.
-7. The API returns `201 Created` after the transaction commits. It does not publish directly to JMS.
-8. `OutboxRelayScheduler` periodically calls `OutboxRelayService`.
-9. The relay locks due `PENDING` outbox rows with `FOR UPDATE SKIP LOCKED`.
-10. The relay publishes the event payload to the `order.submitted` JMS queue through `OrderEventPublisher`.
-11. The relay marks the outbox row `PUBLISHED`, or records retry state on failure.
-12. `OrderSubmittedEventConsumer` receives the message.
-13. The consumer claims the event ID in `processed_messages`.
-14. If the message was already processed, the consumer records a duplicate observation and skips business processing.
-15. The consumer loads and locks or conditionally updates the order.
-16. The execution simulator returns an execution outcome.
-17. The consumer writes an `ExecutionReport`.
-18. The consumer writes a `Trade` when quantity is filled.
-19. The consumer updates `OrderStatus`.
-20. The consumer marks the inbox row `PROCESSED`, or stores failure diagnostics and rethrows for broker redelivery.
-21. Query APIs read current state and history from PostgreSQL.
+5. `ReferenceDataValidationService` verifies the account exists and is `ACTIVE`, and the instrument exists and is `ACTIVE`.
+6. The service claims an `IdempotencyRecord` with a PostgreSQL `ON CONFLICT DO NOTHING` insert.
+7. Within one database transaction, the service stores the order, records the intended response, and inserts an `outbox_events` row containing `OrderSubmittedEvent`.
+8. The API returns `201 Created` after the transaction commits. It does not publish directly to JMS.
+9. `OutboxRelayScheduler` periodically calls `OutboxRelayService`.
+10. The relay locks due `PENDING` outbox rows with `FOR UPDATE SKIP LOCKED`.
+11. The relay publishes the event payload to the `order.submitted` JMS queue through `OrderEventPublisher`.
+12. The relay marks the outbox row `PUBLISHED`, or records retry state on failure.
+13. `OrderSubmittedEventConsumer` receives the message.
+14. The consumer claims the event ID in `processed_messages`.
+15. If the message was already processed, the consumer records a duplicate observation and skips business processing.
+16. The consumer loads and locks or conditionally updates the order.
+17. The execution simulator returns an execution outcome.
+18. The consumer writes an `ExecutionReport`.
+19. The consumer writes a `Trade` when quantity is filled.
+20. The consumer updates `OrderStatus`.
+21. The consumer marks the inbox row `PROCESSED`, or stores failure diagnostics and rethrows for broker redelivery.
+22. Query APIs read current state and history from PostgreSQL.
 
 ## Transaction Boundaries
 
@@ -72,6 +73,7 @@ The submission transaction should:
 Current MVP behavior:
 
 - A valid order is persisted as `ACCEPTED`.
+- Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are rejected before idempotency claim and order persistence.
 - The order, idempotency record, and outbox event are committed in one database transaction.
 - REST submission idempotency uses a database-backed claim: the first request inserts the idempotency key, and concurrent requests with the same key wait on PostgreSQL uniqueness before replaying or conflicting.
 - The REST transaction does not call JMS.
@@ -157,19 +159,20 @@ Concurrency requirements:
 Current MVP tables:
 
 - `orders`
+- `accounts`
+- `instruments`
 - `execution_reports`
 - `trades`
 - `idempotency_records`
 - `outbox_events`
 - `processed_messages`
 
-Planned later tables:
-
-- `accounts`
-- `instruments`
-
 Current constraints:
 
+- `accounts.status` is constrained to `ACTIVE`, `SUSPENDED`, or `CLOSED`.
+- `instruments.asset_class` is constrained to `EQUITY`, `ETF`, `OPTION`, `FUTURE`, or `CRYPTO`.
+- `instruments.status` is constrained to `ACTIVE`, `HALTED`, or `DELISTED`.
+- `instruments.tick_size` must be positive when present.
 - `orders.quantity` must be positive.
 - `orders.filled_quantity` must be non-negative and cannot exceed `orders.quantity`.
 - Price columns must be positive when present.
@@ -191,6 +194,9 @@ Current indexes:
 - `orders(account_id)`
 - `orders(symbol)`
 - `orders(status)`
+- `accounts(status)`
+- `instruments(status)`
+- `instruments(asset_class)`
 - `execution_reports(order_id)`
 - `trades(order_id)`
 - `trades(execution_report_id)`
@@ -201,7 +207,16 @@ Current indexes:
 - `processed_messages(aggregate_id)`
 - `processed_messages(consumer_name, status)`
 
-Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once list endpoints exist.
+Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once search endpoints exist.
+
+Reference-data validation:
+
+- `ReferenceDataValidationService` is called from the application layer after domain object construction and before idempotency claim.
+- Controllers only validate request shape; they do not know account or instrument activity rules.
+- The MVP hard rejects invalid reference data with `400 Bad Request` and does not persist rejected order rows.
+- This keeps the current order lifecycle focused on accepted orders and asynchronous execution. A future audit-heavy workflow could choose to persist rejected orders and rejection reports instead.
+- `ReferenceDataApplicationService` backs simple REST management endpoints for listing, retrieving, creating, and updating accounts and instruments.
+- Delete endpoints are intentionally omitted; account and instrument lifecycle is represented by status so historical orders keep stable references.
 
 ## Messaging Design
 
@@ -303,7 +318,7 @@ Expected categories:
 
 - `400 Bad Request`: malformed JSON or validation failure.
 - `404 Not Found`: missing order, execution report, trade, account, or instrument.
-- `409 Conflict`: idempotency key conflict or invalid state transition.
+- `409 Conflict`: idempotency key conflict, duplicate account, duplicate instrument, or invalid state transition.
 - `422 Unprocessable Entity`: syntactically valid request that violates domain rules, if the project chooses to distinguish it from `400`.
 - `500 Internal Server Error`: unexpected server failure.
 

@@ -51,6 +51,11 @@ public class GlobalApiExceptionHandler {
         return error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", exception.getMessage(), request);
     }
 
+    @ExceptionHandler(ResourceConflictException.class)
+    ResponseEntity<ApiErrorResponse> handleResourceConflict(ResourceConflictException exception, HttpServletRequest request) {
+        return error(HttpStatus.CONFLICT, "RESOURCE_CONFLICT", exception.getMessage(), request);
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<ApiErrorResponse> handleNotFound(ResourceNotFoundException exception, HttpServletRequest request) {
         return error(HttpStatus.NOT_FOUND, "NOT_FOUND", exception.getMessage(), request);

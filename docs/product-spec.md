@@ -11,7 +11,8 @@ The product is for interview preparation. It should be realistic enough to discu
 The MVP includes one Spring Boot service with:
 
 - REST APIs for order submission and read models.
-- PostgreSQL persistence for orders, execution reports, trades, idempotency records, transactional outbox events, and processed-message inbox diagnostics. Account and instrument are represented as explicit order/trade fields in the MVP; dedicated reference-data tables are planned extensions.
+- REST APIs for account and instrument reference-data management.
+- PostgreSQL persistence for accounts, instruments, orders, execution reports, trades, idempotency records, transactional outbox events, and processed-message inbox diagnostics.
 - JMS publishing and consuming with ActiveMQ Artemis.
 - Transactional outbox relay for reliable order-submitted event publication and database-visible retry state.
 - Idempotent order submission using an `Idempotency-Key` header.
@@ -57,8 +58,8 @@ The MVP includes one Spring Boot service with:
 
 The MVP domain includes:
 
-- `Account`: represented by `accountId` on orders and trades in the MVP; a persisted account table is planned.
-- `Instrument`: represented by `symbol` on orders and trades in the MVP; a persisted instrument table is planned.
+- `Account`: persisted reference data used to validate that orders come from active accounts.
+- `Instrument`: persisted reference data used to validate that orders are for active symbols.
 - `Order`: client instruction to buy or sell an instrument.
 - `OrderSide`: `BUY` or `SELL`.
 - `OrderType`: `MARKET` or `LIMIT`.

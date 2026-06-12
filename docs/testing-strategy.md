@@ -43,6 +43,8 @@ Cover orchestration with mocked dependencies where useful:
 - Submit order creates idempotency record.
 - Duplicate idempotency key with same fingerprint returns the same order resource and response status.
 - Duplicate idempotency key with different fingerprint fails with conflict.
+- Unknown or inactive account/instrument reference data rejects before order persistence.
+- Account and instrument reference-data APIs create, update, list, and retrieve rows used by order validation.
 - Accepted order is stored with a pending outbox event in the same transaction.
 - Messaging failure behavior is captured through outbox relay retry metadata and consumer-side `processed_messages` diagnostics.
 
@@ -79,6 +81,7 @@ Run against PostgreSQL Testcontainers:
 - Core persistence tests currently verify save/find behavior for orders, execution reports, and trades.
 - Trade persistence verifies the required link from each trade to the execution report that created it.
 - Table constraints enforce unique idempotency keys.
+- Reference-data repository tests verify seeded active/inactive accounts and instruments.
 - Outbox table constraints enforce valid statuses and non-negative attempt counts.
 - Processed-message inbox constraints enforce valid statuses and non-negative attempt counts.
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
@@ -98,6 +101,8 @@ Run against embedded Artemis or an Artemis Testcontainer:
 
 - `OutboxEventWriter` serializes `OrderSubmittedEvent` into `outbox_events`.
 - API integration tests verify accepted orders create one pending outbox event and invalid/conflicting submissions do not create publishable outbox rows.
+- API integration tests verify unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are hard rejected without order/idempotency/outbox persistence.
+- API integration tests verify account/instrument reference data can be created, updated, retrieved, and then used by order submission.
 - `OutboxRelayService` integration tests verify pending event publication, successful `PUBLISHED` marking, retry state on publish failure, max-attempt `FAILED` behavior, and skipping already-published rows.
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
 - A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.

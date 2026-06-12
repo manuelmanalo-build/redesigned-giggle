@@ -9,7 +9,7 @@ This project is a Java 21 Spring Boot backend that simulates a simplified real-t
 The codebase is a modular monolith with explicit package boundaries:
 
 - `api`: `OrderController`, request/response DTOs, error responses, and `GlobalApiExceptionHandler`.
-- `application`: orchestration services such as `OrderApplicationService`, `OutboxEventWriter`, `OrderSubmittedMessageInboxProcessor`, `OrderExecutionProcessor`, and `ExecutionSimulator`.
+- `application`: orchestration services such as `OrderApplicationService`, `ReferenceDataValidationService`, `OutboxEventWriter`, `OrderSubmittedMessageInboxProcessor`, `OrderExecutionProcessor`, and `ExecutionSimulator`.
 - `domain`: pure Java domain records and enums such as `Order`, `Quantity`, `Price`, `ExecutionReport`, and `Trade`.
 - `persistence`: JPA entities, Spring Data repositories, and Flyway-managed schema.
 - `messaging`: outbox relay/scheduler, JMS event payload, publisher abstraction, publisher implementation, and consumer.
@@ -22,14 +22,15 @@ Core flow:
 2. `CorrelationIdFilter` resolves or creates the correlation ID.
 3. `SubmitOrderRequest` validation handles request shape.
 4. `OrderApplicationService.submitOrder` builds a domain `Order`, accepts it, and computes a SHA-256 request fingerprint.
-5. `IdempotencyRecordJpaRepository.claimSubmission` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
-6. The service saves the order, completes the idempotency record, and inserts a pending outbox row in one Spring transaction.
-7. `OutboxRelayService` polls due pending rows, publishes the JSON event to JMS, and marks successful rows `PUBLISHED`.
-8. Failed relay attempts increment `attempt_count`, store `last_error`, and set `next_attempt_at` for retry.
-9. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderSubmittedMessageInboxProcessor`.
-10. The inbox processor claims `eventId` in `processed_messages`, skips terminal duplicates, and records retry diagnostics.
-11. `OrderExecutionProcessor` uses a pessimistic write lock, deterministic execution-report IDs, and database constraints to avoid duplicate side effects.
-12. Query endpoints return order state, execution reports, and trades from PostgreSQL.
+5. `ReferenceDataValidationService` verifies the account and instrument exist and are active.
+6. `IdempotencyRecordJpaRepository.claimSubmission` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
+7. The service saves the order, completes the idempotency record, and inserts a pending outbox row in one Spring transaction.
+8. `OutboxRelayService` polls due pending rows, publishes the JSON event to JMS, and marks successful rows `PUBLISHED`.
+9. Failed relay attempts increment `attempt_count`, store `last_error`, and set `next_attempt_at` for retry.
+10. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderSubmittedMessageInboxProcessor`.
+11. The inbox processor claims `eventId` in `processed_messages`, skips terminal duplicates, and records retry diagnostics.
+12. `OrderExecutionProcessor` uses a pessimistic write lock, deterministic execution-report IDs, and database constraints to avoid duplicate side effects.
+13. Query endpoints return order state, execution reports, and trades from PostgreSQL.
 
 The architecture is deliberately not split into microservices. For interview purposes, the value is in the clarity of boundaries and failure-mode discussion, not distributed complexity for its own sake.
 
@@ -46,19 +47,21 @@ The architecture is deliberately not split into microservices. For interview pur
 
 Strong OOP answer:
 
-The domain model is not just getters and setters. It encodes rules around order construction, price requirements, quantity validation, state transitions, and trade creation. Persistence entities exist because JPA has different needs from the domain model, so mapping is explicit.
+The domain model is not just getters and setters. It encodes rules around order construction, price requirements, quantity validation, state transitions, and trade creation. Reference-data checks live in an application service because they require repositories and current database state, while controllers only validate transport shape. Persistence entities exist because JPA has different needs from the domain model, so mapping is explicit.
 
 ## 4. Data Structures Used And Why
 
-- Relational tables store authoritative state: `orders`, `execution_reports`, `trades`, `idempotency_records`, `outbox_events`, and `processed_messages`.
+- Relational tables store authoritative state and reference data: `accounts`, `instruments`, `orders`, `execution_reports`, `trades`, `idempotency_records`, `outbox_events`, and `processed_messages`.
 - Primary keys enforce identity for orders, execution reports, trades, and idempotency records.
 - `idempotency_records.idempotency_key` acts as a deduplication set for client retries.
+- `accounts.id` and `instruments.symbol` are reference-data lookup keys for order validation.
 - `outbox_events(status, next_attempt_at, created_at)` acts as a durable work queue for integration-event relay.
 - `processed_messages.message_id` acts as a consumer inbox key for duplicate detection and retry diagnostics.
 - Deterministic execution-report and trade IDs derived from event IDs make duplicate message handling idempotent.
 - `trades.execution_report_id` is unique, enforcing one trade per fill execution report.
 - Indexes support expected lookup paths:
   - `orders(client_order_id)` for client/FIX-style lookup.
+  - `accounts(status)` and `instruments(status)` for operational reference-data review.
   - `orders(account_id)`, `orders(symbol)`, and `orders(status)` for operational filtering.
   - `execution_reports(order_id)` and `trades(order_id)` for order lifecycle history.
   - `trades(execution_report_id)` for the fill-report-to-trade invariant.
@@ -112,6 +115,9 @@ Design points:
 - `X-Correlation-Id` is optional; the service generates one when absent and returns it in responses.
 - Request validation uses Jakarta Bean Validation on DTOs and headers.
 - Domain validation is still enforced separately through `Order`, `Quantity`, `Price`, `AccountId`, and `InstrumentSymbol`.
+- Reference-data validation is enforced in the application layer: only `ACTIVE` accounts and `ACTIVE` instruments can submit orders.
+- Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments return `400 Bad Request` without persisting rejected orders.
+- Reference data is manageable through small REST endpoints that create, update, list, and retrieve accounts and instruments.
 - Errors use a consistent `ApiErrorResponse` shape through `GlobalApiExceptionHandler`.
 - `409 Conflict` is used when an idempotency key is reused with a different normalized request.
 - Query endpoints verify that the order exists before returning execution reports or trades.
@@ -119,7 +125,7 @@ Design points:
 
 Tradeoff:
 
-The API is intentionally small and avoids list/search endpoints for now. The schema already has indexes that would support later account, symbol, and status filtering.
+The order API is intentionally small and avoids order list/search endpoints for now. The schema already has indexes that would support later account, symbol, and status filtering.
 
 ## 8. SQL Schema, Indexing, And Transaction Discussion
 
@@ -130,6 +136,7 @@ PostgreSQL is the source of truth. Flyway migrations define and harden the schem
 - `V4__link_trades_to_execution_reports.sql` adds `trades.execution_report_id`, a foreign key, a unique constraint, and an index.
 - `V5__create_outbox_events.sql` creates the transactional outbox table and relay indexes.
 - `V6__create_processed_messages.sql` creates the consumer inbox table and diagnostic indexes.
+- `V7__create_reference_data.sql` creates `accounts` and `instruments` with seed rows for active and inactive cases.
 
 Important constraints:
 
@@ -145,10 +152,14 @@ Important constraints:
 - Outbox attempt count cannot be negative.
 - Processed-message status must be `RECEIVED`, `PROCESSED`, `FAILED`, `DUPLICATE`, or `DEAD_LETTERED`.
 - Processed-message attempt count cannot be negative.
+- Account status must be `ACTIVE`, `SUSPENDED`, or `CLOSED`.
+- Instrument status must be `ACTIVE`, `HALTED`, or `DELISTED`.
+- Instrument asset class must be `EQUITY`, `ETF`, `OPTION`, `FUTURE`, or `CRYPTO`.
 
 Transaction boundaries:
 
 - Order submission stores the order, idempotency record, and outbox event in one `@Transactional` method.
+- Reference-data validation happens before the idempotency claim, so invalid account/symbol requests do not create idempotency or outbox rows.
 - The REST request does not publish directly to JMS.
 - The outbox relay locks due rows, publishes to JMS, and marks rows `PUBLISHED` or records retry state in its own transaction.
 - Message processing claims the inbox row, writes execution report, trade, order status update, and marks the inbox row `PROCESSED` in one `@Transactional` method.
@@ -218,7 +229,7 @@ Tradeoffs already visible in the code:
 How to improve for production:
 
 - Add DLQ dashboards and poison-message handling runbooks.
-- Add authentication/authorization and account/instrument reference data.
+- Add authentication/authorization and richer account/instrument lifecycle workflows.
 - Add backward-compatible migrations and deployment gates.
 
 ## 11. TDD And Testing Strategy
@@ -355,7 +366,7 @@ This is not a FIX engine. It does not implement sessions, sequence numbers, rese
 Known limitations:
 
 - No broker DLQ listener or administrative reconciliation job that marks inbox rows `DEAD_LETTERED`.
-- Account and instrument are modeled as identifiers, not persisted reference data with active/suspended status.
+- Reference data management is intentionally minimal and does not include delete endpoints.
 - No authentication or authorization.
 - No order cancellation API.
 - No partial-fill simulation path yet, even though domain states include `PARTIALLY_FILLED`.
@@ -368,7 +379,7 @@ Known limitations:
 Improvements:
 
 - Add DLQ dashboards and poison-message runbooks around broker redelivery.
-- Add account/instrument tables and validation.
+- Add secured account/instrument administration and richer validation rules such as permissioned trading, tick-size enforcement, and venue eligibility.
 - Add cancel/replace workflows.
 - Add paginated search endpoints with composite indexes.
 - Add auth with role-based access.
@@ -384,7 +395,7 @@ JPA entities are persistence concerns: they need annotations, no-arg constructor
 
 ### 2. How does idempotent order submission work?
 
-`POST /api/v1/orders` requires an `Idempotency-Key`. The service canonicalizes the business request fields and hashes them with SHA-256. It then tries to insert an `idempotency_records` row using PostgreSQL `ON CONFLICT DO NOTHING`. If the insert succeeds, this request owns the key and creates the order. If it fails, the service loads the existing record: same hash returns the same order resource and response status; different hash returns `409 Conflict`. Because async processing can update the order, a replay may show current state rather than the original `ACCEPTED` snapshot. This is database-backed, so it works across concurrent requests and multiple service instances.
+`POST /api/v1/orders` requires an `Idempotency-Key`. The service canonicalizes the business request fields and hashes them with SHA-256. It first builds the domain order and validates account/instrument reference data. Only valid active accounts and instruments proceed to the idempotency claim. The service then tries to insert an `idempotency_records` row using PostgreSQL `ON CONFLICT DO NOTHING`. If the insert succeeds, this request owns the key and creates the order. If it fails, the service loads the existing record: same hash returns the same order resource and response status; different hash returns `409 Conflict`. Because async processing can update the order, a replay may show current state rather than the original `ACCEPTED` snapshot. This is database-backed, so it works across concurrent requests and multiple service instances.
 
 ### 3. What happens if the same JMS message is delivered twice?
 

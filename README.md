@@ -12,8 +12,10 @@ This project is intended to demonstrate how to design and build a production-sha
 
 The MVP models:
 
-- Account and instrument identifiers represented on orders and trades.
+- Seeded account and instrument reference data used to validate order submissions.
+- REST reference-data APIs for reading, creating, and updating accounts and instruments.
 - Idempotent order submission.
+- Reference-data validation for active accounts and active instruments.
 - SQL-backed order persistence.
 - Transactional outbox storage and relay for reliable JMS publication.
 - JMS-backed asynchronous processing.
@@ -88,6 +90,24 @@ Default local credentials:
 - PostgreSQL password: `trade_password`.
 - Artemis username: `artemis`.
 - Artemis password: `artemis`.
+
+Seeded reference data:
+
+- Active account: `ACC-001`.
+- Inactive accounts for validation demos: `ACC-002` suspended, `ACC-003` closed.
+- Active instruments: `AAPL`, `MSFT`, `TSLA`.
+- Inactive instruments for validation demos: `HALT1` halted, `OLD1` delisted.
+
+Useful reference-data endpoints:
+
+- `GET /api/v1/accounts`
+- `GET /api/v1/accounts/{accountId}`
+- `POST /api/v1/accounts`
+- `PUT /api/v1/accounts/{accountId}`
+- `GET /api/v1/instruments`
+- `GET /api/v1/instruments/{symbol}`
+- `POST /api/v1/instruments`
+- `PUT /api/v1/instruments/{symbol}`
 
 Start the application locally after Docker Compose is running:
 

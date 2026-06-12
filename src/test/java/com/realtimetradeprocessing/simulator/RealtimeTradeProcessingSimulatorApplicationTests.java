@@ -6,6 +6,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.AccountJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.InstrumentJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.ProcessedMessageJpaRepository;
@@ -34,6 +36,12 @@ class RealtimeTradeProcessingSimulatorApplicationTests {
 
     @MockBean
     private IdempotencyRecordJpaRepository idempotencyRecordRepository;
+
+    @MockBean
+    private AccountJpaRepository accountRepository;
+
+    @MockBean
+    private InstrumentJpaRepository instrumentRepository;
 
     @MockBean
     private OutboxEventJpaRepository outboxEventRepository;

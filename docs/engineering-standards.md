@@ -33,6 +33,7 @@ These standards guide implementation once code is added. They should keep the pr
 - Accept and return `X-Correlation-Id`.
 - Return consistent error responses.
 - Validate API shape at the boundary and enforce business invariants in domain/application code.
+- Keep reference-data validation in application services, not controllers.
 - Never expose stack traces or persistence internals in API responses.
 
 ## Persistence Standards

@@ -51,6 +51,7 @@ public class OrderApplicationService {
     private final TradeJpaRepository tradeRepository;
     private final IdempotencyRecordJpaRepository idempotencyRecordRepository;
     private final OutboxEventWriter outboxEventWriter;
+    private final ReferenceDataValidationService referenceDataValidationService;
     private final TradeMetrics tradeMetrics;
     private final Clock clock;
 
@@ -61,6 +62,7 @@ public class OrderApplicationService {
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
         OutboxEventWriter outboxEventWriter,
+        ReferenceDataValidationService referenceDataValidationService,
         TradeMetrics tradeMetrics
     ) {
         this(
@@ -69,6 +71,7 @@ public class OrderApplicationService {
             tradeRepository,
             idempotencyRecordRepository,
             outboxEventWriter,
+            referenceDataValidationService,
             tradeMetrics,
             Clock.systemUTC()
         );
@@ -80,6 +83,7 @@ public class OrderApplicationService {
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
         OutboxEventWriter outboxEventWriter,
+        ReferenceDataValidationService referenceDataValidationService,
         TradeMetrics tradeMetrics,
         Clock clock
     ) {
@@ -88,6 +92,7 @@ public class OrderApplicationService {
         this.tradeRepository = tradeRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
         this.outboxEventWriter = outboxEventWriter;
+        this.referenceDataValidationService = referenceDataValidationService;
         this.tradeMetrics = tradeMetrics;
         this.clock = clock;
     }
@@ -98,6 +103,7 @@ public class OrderApplicationService {
         String requestHash = fingerprint(request);
         String resolvedCorrelationId = resolveCorrelationId(correlationId);
         Order acceptedOrder = toDomainOrder(request).accept();
+        referenceDataValidationService.validateOrderReferenceData(acceptedOrder);
         Instant now = clock.instant();
 
         int claimed = idempotencyRecordRepository.claimSubmission(normalizedIdempotencyKey, requestHash, CREATED, now);

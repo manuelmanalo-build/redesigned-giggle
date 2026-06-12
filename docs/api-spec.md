@@ -31,11 +31,149 @@ This document defines the REST API contract for the current MVP implementation a
 
 ## Endpoints
 
+### List Accounts
+
+`GET /api/v1/accounts`
+
+Returns accounts ordered by account ID.
+
+Response fields:
+
+- `accountId`
+- `displayName`
+- `status`
+- `createdAt`
+- `updatedAt`
+
+### Get Account
+
+`GET /api/v1/accounts/{accountId}`
+
+Responses:
+
+- `200 OK` when found.
+- `404 Not Found` when missing.
+
+### Create Account
+
+`POST /api/v1/accounts`
+
+Creates account reference data used by order validation.
+
+Request body:
+
+```json
+{
+  "accountId": "ACC-100",
+  "displayName": "Interview Demo Account",
+  "status": "ACTIVE"
+}
+```
+
+Responses:
+
+- `201 Created` when created.
+- `400 Bad Request` for invalid request shape or status.
+- `409 Conflict` when the account already exists.
+
+### Update Account
+
+`PUT /api/v1/accounts/{accountId}`
+
+Updates account display name and lifecycle status. The account ID is stable and cannot be renamed.
+
+Request body:
+
+```json
+{
+  "displayName": "Interview Demo Account",
+  "status": "SUSPENDED"
+}
+```
+
+Responses:
+
+- `200 OK` when updated.
+- `400 Bad Request` for invalid request shape or status.
+- `404 Not Found` when missing.
+
+### List Instruments
+
+`GET /api/v1/instruments`
+
+Returns instruments ordered by symbol.
+
+Response fields:
+
+- `symbol`
+- `name`
+- `assetClass`
+- `status`
+- `tickSize`
+- `createdAt`
+- `updatedAt`
+
+### Get Instrument
+
+`GET /api/v1/instruments/{symbol}`
+
+Responses:
+
+- `200 OK` when found.
+- `404 Not Found` when missing.
+
+### Create Instrument
+
+`POST /api/v1/instruments`
+
+Creates instrument reference data used by order validation. Symbols are normalized to uppercase.
+
+Request body:
+
+```json
+{
+  "symbol": "IBM",
+  "name": "International Business Machines Corporation",
+  "assetClass": "EQUITY",
+  "status": "ACTIVE",
+  "tickSize": 0.01
+}
+```
+
+Responses:
+
+- `201 Created` when created.
+- `400 Bad Request` for invalid request shape, asset class, status, or tick size.
+- `409 Conflict` when the instrument already exists.
+
+### Update Instrument
+
+`PUT /api/v1/instruments/{symbol}`
+
+Updates instrument name, asset class, lifecycle status, and tick size. The symbol is stable and cannot be renamed.
+
+Request body:
+
+```json
+{
+  "name": "International Business Machines Corporation",
+  "assetClass": "EQUITY",
+  "status": "HALTED",
+  "tickSize": 0.01
+}
+```
+
+Responses:
+
+- `200 OK` when updated.
+- `400 Bad Request` for invalid request shape, asset class, status, or tick size.
+- `404 Not Found` when missing.
+
 ### Submit Order
 
 `POST /api/v1/orders`
 
-Validates, persists, and accepts an order. The same database transaction stores the order, idempotency result, and a pending transactional outbox event. A separate outbox relay later publishes `OrderSubmittedEvent` to the `order.submitted` JMS queue. The asynchronous consumer may then update the order to `FILLED`, create an execution report, and create a trade; non-marketable limit orders remain `ACCEPTED` with a no-fill execution report.
+Validates, persists, and accepts an order. Syntactic validation and reference-data validation happen before persistence. The account must exist and be `ACTIVE`; the instrument symbol must exist and be `ACTIVE`. The same database transaction stores the order, idempotency result, and a pending transactional outbox event. A separate outbox relay later publishes `OrderSubmittedEvent` to the `order.submitted` JMS queue. The asynchronous consumer may then update the order to `FILLED`, create an execution report, and create a trade; non-marketable limit orders remain `ACCEPTED` with a no-fill execution report.
 
 Required header:
 
@@ -60,6 +198,8 @@ Validation rules:
 - `clientOrderId` is required, non-blank, and at most 128 characters.
 - `accountId` is required, non-blank, and at most 128 characters.
 - `symbol` is required, non-blank, and at most 32 characters. It is normalized to uppercase by the domain model.
+- `accountId` must exist in `accounts` and have status `ACTIVE`.
+- `symbol` must exist in `instruments` and have status `ACTIVE`.
 - `side` must be `BUY` or `SELL`.
 - `type` must be `MARKET` or `LIMIT`.
 - `quantity` must be positive.
@@ -93,6 +233,8 @@ Idempotent replay:
 - Same `Idempotency-Key` with a different request fingerprint returns `409 Conflict`.
 - Idempotent replay does not republish `OrderSubmittedEvent`.
 - Invalid or rejected requests do not publish `OrderSubmittedEvent`.
+- Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments return `400 Bad Request` with `VALIDATION_ERROR`.
+- Reference-data validation failures do not persist an order, idempotency record, or outbox event.
 
 ### Get Order
 
@@ -295,6 +437,6 @@ All API errors should use a consistent response shape:
 - `201 Created`: order persisted and accepted.
 - `400 Bad Request`: malformed request or field validation error.
 - `404 Not Found`: requested resource does not exist.
-- `409 Conflict`: idempotency key conflict or invalid state conflict.
+- `409 Conflict`: idempotency key conflict, duplicate account, or duplicate instrument.
 - `422 Unprocessable Entity`: optional domain-rule failure status if adopted.
 - `500 Internal Server Error`: unexpected failure.

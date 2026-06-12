@@ -8,39 +8,39 @@ This document defines the intended domain model for the MVP. The model is simpli
 
 ### Account
 
-Represents a trading account. In the current MVP, this is represented by `accountId` on orders and trades; a persisted `accounts` table is planned.
+Represents a trading account. The MVP persists account reference data, exposes it through REST management endpoints, and uses it to validate order submissions before an order is accepted.
 
 Fields:
 
 - `accountId`: stable external identifier.
 - `displayName`: human-readable account name.
-- `status`: `ACTIVE` or `SUSPENDED`.
+- `status`: `ACTIVE`, `SUSPENDED`, or `CLOSED`.
 - `createdAt`
 - `updatedAt`
 
-Planned rules when account persistence is added:
-
 - Only active accounts can submit orders.
+- Accounts can be created and updated through the reference-data API. The account ID is stable and cannot be renamed.
 - Account IDs are unique.
+- Unknown, suspended, and closed accounts are hard rejected by the API with `400 Bad Request`; no order, idempotency record, or outbox event is created.
 
 ### Instrument
 
-Represents a tradable instrument. In the current MVP, this is represented by `symbol` on orders and trades; a persisted `instruments` table is planned.
+Represents a tradable instrument. The MVP persists instrument reference data, exposes it through REST management endpoints, and uses it to validate order submissions before an order is accepted.
 
 Fields:
 
-- `instrumentId`: internal identifier.
 - `symbol`: unique symbol, such as `AAPL`.
-- `description`
-- `currency`
-- `status`: `ACTIVE` or `INACTIVE`.
+- `name`
+- `assetClass`: `EQUITY`, `ETF`, `OPTION`, `FUTURE`, or `CRYPTO`.
+- `status`: `ACTIVE`, `HALTED`, or `DELISTED`.
+- `tickSize`
 - `createdAt`
 - `updatedAt`
 
-Planned rules when instrument persistence is added:
-
 - Only active instruments can be ordered.
+- Instruments can be created and updated through the reference-data API. The symbol is stable and cannot be renamed.
 - Symbol is unique.
+- Unknown, halted, and delisted instruments are hard rejected by the API with `400 Bad Request`; no order, idempotency record, or outbox event is created.
 
 ### Order
 
@@ -122,7 +122,7 @@ Rules:
 
 ### IdempotencyRecord
 
-Represents deduplication state for REST submission. A dedicated message-consumption inbox table is planned.
+Represents deduplication state for REST submission. Message-consumption deduplication is handled separately by `processed_messages`.
 
 Fields:
 
@@ -199,11 +199,11 @@ The MVP simulator is deterministic for tests. Current rules:
 - For `LIMIT BUY`, fill when simulated market price is less than or equal to limit price.
 - For `LIMIT SELL`, fill when simulated market price is greater than or equal to limit price.
 - If no fill is possible, leave the order `ACCEPTED`, write an `ACCEPTED` execution report with a no-fill message, and create no trade.
-- Partial fills, account activity checks, and instrument activity checks are planned extensions.
+- Partial fills are a planned extension.
 
 ## Invariants
 
-- Accepted orders currently carry non-blank `account_id` and `symbol`; active account/instrument reference-data validation is planned.
+- Accepted orders carry non-blank `account_id` and `symbol` that were validated against active reference data at submission time.
 - Every execution report references exactly one order.
 - Every trade references exactly one order and one execution report.
 - A fill or partial fill execution report must create a trade.
@@ -212,7 +212,54 @@ The MVP simulator is deterministic for tests. Current rules:
 
 ## Current Persistence Schema
 
-The first persistence migration implements the core trade-processing tables only. Account and instrument remain domain concepts represented by `account_id` and `symbol` fields until reference-data persistence is added.
+The persistence schema includes core trade-processing tables plus reference-data tables used by order submission validation. Orders still denormalize `account_id` and `symbol` for query and audit convenience.
+
+### `accounts`
+
+Columns:
+
+- `id`: primary key, stable account identifier.
+- `display_name`: account display name.
+- `status`: `ACTIVE`, `SUSPENDED`, or `CLOSED`.
+- `created_at`, `updated_at`: persistence timestamps.
+
+Seed rows:
+
+- `ACC-001`: `ACTIVE`
+- `ACC-002`: `SUSPENDED`
+- `ACC-003`: `CLOSED`
+
+Database constraints enforce valid account statuses.
+
+Indexes:
+
+- `idx_accounts_status`
+
+### `instruments`
+
+Columns:
+
+- `symbol`: primary key, normalized instrument symbol.
+- `name`: instrument display name.
+- `asset_class`: `EQUITY`, `ETF`, `OPTION`, `FUTURE`, or `CRYPTO`.
+- `status`: `ACTIVE`, `HALTED`, or `DELISTED`.
+- `tick_size`: optional positive tick size.
+- `created_at`, `updated_at`: persistence timestamps.
+
+Seed rows:
+
+- `AAPL`: `ACTIVE`
+- `MSFT`: `ACTIVE`
+- `TSLA`: `ACTIVE`
+- `HALT1`: `HALTED`
+- `OLD1`: `DELISTED`
+
+Database constraints enforce valid asset classes, valid instrument statuses, and positive tick size when present.
+
+Indexes:
+
+- `idx_instruments_status`
+- `idx_instruments_asset_class`
 
 ### `orders`
 

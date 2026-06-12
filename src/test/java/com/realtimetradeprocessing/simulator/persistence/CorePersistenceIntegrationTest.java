@@ -31,12 +31,16 @@ import com.realtimetradeprocessing.simulator.domain.Trade;
 import com.realtimetradeprocessing.simulator.domain.TradeId;
 import com.realtimetradeprocessing.simulator.domain.AccountId;
 import com.realtimetradeprocessing.simulator.domain.InstrumentSymbol;
+import com.realtimetradeprocessing.simulator.persistence.entity.AccountStatus;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.IdempotencyRecordEntity;
+import com.realtimetradeprocessing.simulator.persistence.entity.InstrumentStatus;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
+import com.realtimetradeprocessing.simulator.persistence.repository.AccountJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.InstrumentJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 
@@ -71,6 +75,12 @@ class CorePersistenceIntegrationTest {
 
     @Autowired
     private IdempotencyRecordJpaRepository idempotencyRecordRepository;
+
+    @Autowired
+    private AccountJpaRepository accountRepository;
+
+    @Autowired
+    private InstrumentJpaRepository instrumentRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -320,6 +330,41 @@ class CorePersistenceIntegrationTest {
             Timestamp.from(now)
         ))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void loadsSeededAccountReferenceData() {
+        assertThat(accountRepository.findById("ACC-001"))
+            .hasValueSatisfying(account -> {
+                assertThat(account.getDisplayName()).isEqualTo("Demo Active Account");
+                assertThat(account.getStatus()).isEqualTo(AccountStatus.ACTIVE);
+                assertThat(account.isActive()).isTrue();
+            });
+        assertThat(accountRepository.findById("ACC-002"))
+            .hasValueSatisfying(account -> {
+                assertThat(account.getStatus()).isEqualTo(AccountStatus.SUSPENDED);
+                assertThat(account.isActive()).isFalse();
+            });
+        assertThat(accountRepository.findById("ACC-003"))
+            .hasValueSatisfying(account -> assertThat(account.getStatus()).isEqualTo(AccountStatus.CLOSED));
+    }
+
+    @Test
+    void loadsSeededInstrumentReferenceData() {
+        assertThat(instrumentRepository.findById("AAPL"))
+            .hasValueSatisfying(instrument -> {
+                assertThat(instrument.getName()).isEqualTo("Apple Inc.");
+                assertThat(instrument.getStatus()).isEqualTo(InstrumentStatus.ACTIVE);
+                assertThat(instrument.isActive()).isTrue();
+                assertThat(instrument.getTickSize()).isEqualByComparingTo("0.01");
+            });
+        assertThat(instrumentRepository.findById("HALT1"))
+            .hasValueSatisfying(instrument -> {
+                assertThat(instrument.getStatus()).isEqualTo(InstrumentStatus.HALTED);
+                assertThat(instrument.isActive()).isFalse();
+            });
+        assertThat(instrumentRepository.findById("OLD1"))
+            .hasValueSatisfying(instrument -> assertThat(instrument.getStatus()).isEqualTo(InstrumentStatus.DELISTED));
     }
 
     private void saveAcceptedMarketOrder(String orderId, Instant now) {
