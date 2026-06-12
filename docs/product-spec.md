@@ -16,9 +16,10 @@ The MVP includes one Spring Boot service with:
 - JMS publishing and consuming with ActiveMQ Artemis.
 - Transactional outbox relay for reliable order-submitted event publication and database-visible retry state.
 - Idempotent order submission using an `Idempotency-Key` header.
+- Idempotent cancel and replace workflows for open orders.
 - Idempotent message consumption using a processed-message inbox, event IDs, and deterministic execution-report/trade IDs.
 - A deterministic execution simulator that creates execution reports.
-- Trade creation when the current simulator fills an order. `PARTIALLY_FILLED` is modeled in the domain as a lifecycle extension, but the current simulator only produces full fills or no-fill accepted reports.
+- Trade creation when the current simulator fills an order. `PARTIALLY_FILLED` is modeled in the domain and supported by cancel/replace guards, but the current simulator only produces full fills or no-fill accepted reports.
 - Order status updates based on execution outcome.
 - Structured logs with correlation IDs.
 - Test-first implementation with unit, slice, integration, and end-to-end tests.

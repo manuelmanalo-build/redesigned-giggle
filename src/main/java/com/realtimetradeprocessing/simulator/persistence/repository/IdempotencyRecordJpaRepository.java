@@ -27,7 +27,7 @@ public interface IdempotencyRecordJpaRepository extends JpaRepository<Idempotenc
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         """, nativeQuery = true)
-    int claimSubmission(
+    int claimRequest(
         @Param("idempotencyKey") String idempotencyKey,
         @Param("requestHash") String requestHash,
         @Param("responseStatus") int responseStatus,
@@ -41,7 +41,7 @@ public interface IdempotencyRecordJpaRepository extends JpaRepository<Idempotenc
             response_status = :responseStatus
         WHERE idempotency_key = :idempotencyKey
         """, nativeQuery = true)
-    int completeSubmission(
+    int completeRequest(
         @Param("idempotencyKey") String idempotencyKey,
         @Param("orderId") String orderId,
         @Param("responseStatus") int responseStatus

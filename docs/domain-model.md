@@ -70,6 +70,11 @@ Rules:
 - `MARKET` orders do not require a limit price.
 - Filled quantity cannot exceed order quantity.
 - Remaining quantity equals quantity minus filled quantity.
+- Orders can be cancelled only from `ACCEPTED` or `PARTIALLY_FILLED`.
+- Limit orders can be replaced only from `ACCEPTED` or `PARTIALLY_FILLED`.
+- Replacement quantity must be greater than or equal to already filled quantity.
+- Market order replacement is rejected in the MVP.
+- Replace updates the existing order row in place. This keeps the implementation small; a production system would usually preserve explicit order versions or amendment history.
 
 ### ExecutionReport
 
@@ -95,7 +100,7 @@ Rules:
 - `lastQuantity` is positive for fill and partial-fill reports.
 - `lastPrice` is positive when `lastQuantity` is positive.
 - Rejected reports must include a message.
-- Accepted, rejected, and cancelled reports do not carry fill quantity or price.
+- Accepted, rejected, replaced, and cancelled reports do not carry fill quantity or price.
 
 ### Trade
 
@@ -122,7 +127,7 @@ Rules:
 
 ### IdempotencyRecord
 
-Represents deduplication state for REST submission. Message-consumption deduplication is handled separately by `processed_messages`.
+Represents deduplication state for REST submit, cancel, and replace workflows. Message-consumption deduplication is handled separately by `processed_messages`.
 
 Fields:
 
@@ -136,7 +141,7 @@ Fields:
 
 Rules:
 
-- `idempotencyKey` is unique for REST submissions.
+- `idempotencyKey` is unique for REST write operations.
 - Reuse with a different request fingerprint is a conflict.
 - Completed records return the same order resource and response status for equivalent retry requests.
 
@@ -159,9 +164,7 @@ Rules:
 - `REJECTED`: failed validation or simulated execution.
 - `PARTIALLY_FILLED`: some quantity filled and some remaining.
 - `FILLED`: full quantity filled.
-- `CANCELLED`: reserved for future use.
-
-The MVP does not implement cancel requests, but `CANCELLED` may be included to discuss lifecycle extension.
+- `CANCELLED`: client cancellation accepted for an open order.
 
 ### ExecutionType
 
@@ -169,6 +172,7 @@ The MVP does not implement cancel requests, but `CANCELLED` may be included to d
 - `REJECTED`: order rejected by processing.
 - `PARTIAL_FILL`: order partially executed.
 - `FILL`: order fully executed.
+- `REPLACED`: order quantity or limit price amended in place.
 - `CANCELLED`: order cancelled.
 
 ## State Transitions
@@ -182,6 +186,8 @@ Allowed MVP order transitions:
 - `PARTIALLY_FILLED` to `FILLED`.
 - `ACCEPTED` to `CANCELLED`.
 - `PARTIALLY_FILLED` to `CANCELLED`.
+
+Replace keeps the current status as `ACCEPTED` or `PARTIALLY_FILLED`; it amends quantity and/or limit price and records an execution report with `ExecutionType.REPLACED`.
 
 Disallowed transitions:
 

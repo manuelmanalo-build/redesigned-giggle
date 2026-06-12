@@ -118,6 +118,7 @@ Design points:
 - Reference-data validation is enforced in the application layer: only `ACTIVE` accounts and `ACTIVE` instruments can submit orders.
 - Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments return `400 Bad Request` without persisting rejected orders.
 - Reference data is manageable through small REST endpoints that create, update, list, and retrieve accounts and instruments.
+- Cancel and replace are implemented as idempotent write endpoints with order-row locking, state checks, and execution-report audit records.
 - Errors use a consistent `ApiErrorResponse` shape through `GlobalApiExceptionHandler`.
 - `409 Conflict` is used when an idempotency key is reused with a different normalized request.
 - Query endpoints verify that the order exists before returning execution reports or trades.
@@ -137,6 +138,7 @@ PostgreSQL is the source of truth. Flyway migrations define and harden the schem
 - `V5__create_outbox_events.sql` creates the transactional outbox table and relay indexes.
 - `V6__create_processed_messages.sql` creates the consumer inbox table and diagnostic indexes.
 - `V7__create_reference_data.sql` creates `accounts` and `instruments` with seed rows for active and inactive cases.
+- `V8__allow_replaced_execution_reports.sql` extends execution-report constraints for replace audit records.
 
 Important constraints:
 
@@ -146,6 +148,7 @@ Important constraints:
 - Limit orders must have limit price.
 - Fill execution reports must have executed quantity and execution price.
 - Non-fill execution reports must not have fill fields.
+- Cancel and replace execution reports carry messages but no fill quantity or price.
 - Trades require positive quantity and price.
 - One execution report can create at most one trade.
 - Outbox status must be `PENDING`, `PUBLISHED`, or `FAILED`.
@@ -355,7 +358,9 @@ Trade lifecycle shown by the application:
 - REST submission accepts and persists it as `ACCEPTED`.
 - Async processing may leave it `ACCEPTED` with a no-fill execution report, or move it to `FILLED`.
 - A fill creates an `ExecutionReport` and a `Trade`.
-- `PARTIALLY_FILLED`, `CANCELLED`, and `REJECTED` are modeled but not fully exposed through all workflows yet.
+- Client cancel moves open orders to `CANCELLED` and records a cancel execution report.
+- Client replace amends open limit orders in place and records a replace execution report.
+- `PARTIALLY_FILLED` is modeled and protected by cancel/replace guards, but the simulator does not yet generate partial fills.
 
 Important honesty:
 
@@ -368,7 +373,8 @@ Known limitations:
 - No broker DLQ listener or administrative reconciliation job that marks inbox rows `DEAD_LETTERED`.
 - Reference data management is intentionally minimal and does not include delete endpoints.
 - No authentication or authorization.
-- No order cancellation API.
+- Replace updates orders in place rather than preserving explicit order versions.
+- Replace does not publish a new JMS event; a production venue adapter would usually emit an amendment event.
 - No partial-fill simulation path yet, even though domain states include `PARTIALLY_FILLED`.
 - No list/search endpoints or pagination implementation yet.
 - No real market data, matching engine, or external venue integration.
@@ -380,7 +386,7 @@ Improvements:
 
 - Add DLQ dashboards and poison-message runbooks around broker redelivery.
 - Add secured account/instrument administration and richer validation rules such as permissioned trading, tick-size enforcement, and venue eligibility.
-- Add cancel/replace workflows.
+- Add explicit order versioning and amendment events for replace workflows.
 - Add paginated search endpoints with composite indexes.
 - Add auth with role-based access.
 - Add realistic partial-fill and rejection scenarios.

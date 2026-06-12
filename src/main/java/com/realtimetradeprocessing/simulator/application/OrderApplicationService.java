@@ -17,22 +17,29 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.realtimetradeprocessing.simulator.api.CancelOrderRequest;
 import com.realtimetradeprocessing.simulator.api.ExecutionReportResponse;
 import com.realtimetradeprocessing.simulator.api.IdempotencyConflictException;
 import com.realtimetradeprocessing.simulator.api.OrderResponse;
 import com.realtimetradeprocessing.simulator.api.OrderSubmissionResult;
+import com.realtimetradeprocessing.simulator.api.ReplaceOrderRequest;
+import com.realtimetradeprocessing.simulator.api.ResourceConflictException;
 import com.realtimetradeprocessing.simulator.api.ResourceNotFoundException;
 import com.realtimetradeprocessing.simulator.api.SubmitOrderRequest;
 import com.realtimetradeprocessing.simulator.api.TradeResponse;
 import com.realtimetradeprocessing.simulator.domain.AccountId;
+import com.realtimetradeprocessing.simulator.domain.ExecutionReport;
+import com.realtimetradeprocessing.simulator.domain.ExecutionReportId;
 import com.realtimetradeprocessing.simulator.domain.InstrumentSymbol;
 import com.realtimetradeprocessing.simulator.domain.Order;
 import com.realtimetradeprocessing.simulator.domain.OrderId;
+import com.realtimetradeprocessing.simulator.domain.OrderStatus;
 import com.realtimetradeprocessing.simulator.domain.OrderType;
 import com.realtimetradeprocessing.simulator.domain.Price;
 import com.realtimetradeprocessing.simulator.domain.Quantity;
 import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
 import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
+import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.IdempotencyRecordEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
@@ -45,6 +52,7 @@ public class OrderApplicationService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(OrderApplicationService.class);
     private static final int CREATED = 201;
+    private static final int OK = 200;
 
     private final OrderJpaRepository orderRepository;
     private final ExecutionReportJpaRepository executionReportRepository;
@@ -106,7 +114,7 @@ public class OrderApplicationService {
         referenceDataValidationService.validateOrderReferenceData(acceptedOrder);
         Instant now = clock.instant();
 
-        int claimed = idempotencyRecordRepository.claimSubmission(normalizedIdempotencyKey, requestHash, CREATED, now);
+        int claimed = idempotencyRecordRepository.claimRequest(normalizedIdempotencyKey, requestHash, CREATED, now);
         if (claimed == 0) {
             return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
                 .map(record -> replayOrConflict(record, requestHash))
@@ -114,6 +122,77 @@ public class OrderApplicationService {
         }
 
         return createAcceptedOrder(request, acceptedOrder, normalizedIdempotencyKey, resolvedCorrelationId, now);
+    }
+
+    @Transactional
+    public OrderSubmissionResult cancelOrder(String orderId, CancelOrderRequest request, String idempotencyKey) {
+        String normalizedIdempotencyKey = requireNonBlank(idempotencyKey, "Idempotency key must not be blank");
+        String requestHash = fingerprintCancel(orderId, request);
+        Instant now = clock.instant();
+
+        int claimed = idempotencyRecordRepository.claimRequest(normalizedIdempotencyKey, requestHash, OK, now);
+        if (claimed == 0) {
+            return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
+                .map(record -> replayOrConflict(record, requestHash))
+                .orElseThrow(() -> new IllegalStateException("Idempotency claim was not visible after conflict"));
+        }
+
+        OrderEntity order = findOrderForUpdate(orderId);
+        if (order.getStatus() != OrderStatus.ACCEPTED && order.getStatus() != OrderStatus.PARTIALLY_FILLED) {
+            throw new ResourceConflictException("Order cannot be cancelled when status is " + order.getStatus());
+        }
+
+        order.toDomain().cancel();
+        order.markCancelled(now);
+        ExecutionReport report = ExecutionReport.cancelled(
+            ExecutionReportId.of(UUID.randomUUID().toString()),
+            OrderId.of(order.getId()),
+            reasonOrDefault(request.reason(), "Client requested cancel")
+        );
+        executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
+        tradeMetrics.executionReportCreated();
+        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK);
+        return new OrderSubmissionResult(OK, OrderResponse.fromEntity(order));
+    }
+
+    @Transactional
+    public OrderSubmissionResult replaceOrder(String orderId, ReplaceOrderRequest request, String idempotencyKey) {
+        String normalizedIdempotencyKey = requireNonBlank(idempotencyKey, "Idempotency key must not be blank");
+        String requestHash = fingerprintReplace(orderId, request);
+        Instant now = clock.instant();
+
+        int claimed = idempotencyRecordRepository.claimRequest(normalizedIdempotencyKey, requestHash, OK, now);
+        if (claimed == 0) {
+            return idempotencyRecordRepository.findById(normalizedIdempotencyKey)
+                .map(record -> replayOrConflict(record, requestHash))
+                .orElseThrow(() -> new IllegalStateException("Idempotency claim was not visible after conflict"));
+        }
+
+        OrderEntity order = findOrderForUpdate(orderId);
+        if (order.getStatus() != OrderStatus.ACCEPTED && order.getStatus() != OrderStatus.PARTIALLY_FILLED) {
+            throw new ResourceConflictException("Order cannot be replaced when status is " + order.getStatus());
+        }
+        if (order.getType() != OrderType.LIMIT) {
+            throw new ResourceConflictException("Only limit orders can be replaced");
+        }
+        long newQuantity = requirePositiveQuantity(request.newQuantity(), "Replacement quantity must be positive");
+        if (newQuantity < order.getFilledQuantity()) {
+            throw new ResourceConflictException("Replacement quantity must be greater than or equal to filled quantity");
+        }
+
+        BigDecimal replacementPrice = request.newLimitPrice() == null ? order.getLimitPrice() : request.newLimitPrice();
+        Order replaced = order.toDomain().replaceLimit(Quantity.of(newQuantity), Price.of(replacementPrice));
+        order.replaceLimit(replaced.quantity().value(), replaced.limitPrice().orElseThrow().amount(), now);
+        ExecutionReport report = ExecutionReport.replaced(
+            ExecutionReportId.of(UUID.randomUUID().toString()),
+            OrderId.of(order.getId()),
+            order.getStatus(),
+            replaceMessage(request, order)
+        );
+        executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
+        tradeMetrics.executionReportCreated();
+        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK);
+        return new OrderSubmissionResult(OK, OrderResponse.fromEntity(order));
     }
 
     @Transactional(readOnly = true)
@@ -153,6 +232,18 @@ public class OrderApplicationService {
         return new OrderSubmissionResult(record.getResponseStatus(), response);
     }
 
+    private OrderEntity findOrderForUpdate(String orderId) {
+        return orderRepository.findByIdForUpdate(orderId)
+            .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
+    }
+
+    private void completeIdempotency(String idempotencyKey, String orderId, int responseStatus) {
+        int completed = idempotencyRecordRepository.completeRequest(idempotencyKey, orderId, responseStatus);
+        if (completed != 1) {
+            throw new IllegalStateException("Failed to complete idempotency record: " + idempotencyKey);
+        }
+    }
+
     private OrderSubmissionResult createAcceptedOrder(
         SubmitOrderRequest request,
         Order order,
@@ -161,10 +252,7 @@ public class OrderApplicationService {
         Instant now
     ) {
         OrderEntity savedOrder = orderRepository.saveAndFlush(OrderEntity.fromDomain(order, normalizedClientOrderId(request), 0, now));
-        int completed = idempotencyRecordRepository.completeSubmission(idempotencyKey, savedOrder.getId(), CREATED);
-        if (completed != 1) {
-            throw new IllegalStateException("Failed to complete idempotency record: " + idempotencyKey);
-        }
+        completeIdempotency(idempotencyKey, savedOrder.getId(), CREATED);
         tradeMetrics.orderSubmitted();
         LOGGER.info(
             "order_submission_accepted orderId={} clientOrderId={} accountId={} symbol={} side={} type={}",
@@ -224,12 +312,27 @@ public class OrderApplicationService {
             Long.toString(request.quantity()),
             normalizedPrice(request.limitPrice())
         );
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
-        }
+        return sha256(canonical);
+    }
+
+    private static String fingerprintCancel(String orderId, CancelOrderRequest request) {
+        String canonical = String.join("|",
+            "cancel",
+            requireNonBlank(orderId, "Order ID must not be blank"),
+            reasonOrDefault(request.reason(), "Client requested cancel")
+        );
+        return sha256(canonical);
+    }
+
+    private static String fingerprintReplace(String orderId, ReplaceOrderRequest request) {
+        String canonical = String.join("|",
+            "replace",
+            requireNonBlank(orderId, "Order ID must not be blank"),
+            Long.toString(requirePositiveQuantity(request.newQuantity(), "Replacement quantity must be positive")),
+            normalizedPrice(request.newLimitPrice()),
+            reasonOrDefault(request.reason(), "Client amended order")
+        );
+        return sha256(canonical);
     }
 
     private static String normalizedClientOrderId(SubmitOrderRequest request) {
@@ -241,6 +344,35 @@ public class OrderApplicationService {
             return "";
         }
         return price.stripTrailingZeros().toPlainString();
+    }
+
+    private static String replaceMessage(ReplaceOrderRequest request, OrderEntity order) {
+        return reasonOrDefault(request.reason(), "Client amended order")
+            + "; newQuantity=" + order.getQuantity()
+            + "; newLimitPrice=" + normalizedPrice(order.getLimitPrice());
+    }
+
+    private static String reasonOrDefault(String reason, String defaultReason) {
+        if (reason == null || reason.isBlank()) {
+            return defaultReason;
+        }
+        return reason.trim();
+    }
+
+    private static long requirePositiveQuantity(Long quantity, String message) {
+        if (quantity == null || quantity <= 0) {
+            throw new IllegalArgumentException(message);
+        }
+        return quantity;
+    }
+
+    private static String sha256(String canonical) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
     }
 
     private static String resolveCorrelationId(String correlationId) {

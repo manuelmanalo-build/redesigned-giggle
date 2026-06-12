@@ -95,6 +95,18 @@ public record Order(
         return transitionTo(OrderStatus.CANCELLED);
     }
 
+    public Order replaceLimit(Quantity newQuantity, Price newLimitPrice) {
+        Objects.requireNonNull(newQuantity, "New quantity must not be null");
+        Objects.requireNonNull(newLimitPrice, "New limit price must not be null");
+        if (orderType != OrderType.LIMIT) {
+            throw new DomainException("Only limit orders can be replaced");
+        }
+        if (status != OrderStatus.ACCEPTED && status != OrderStatus.PARTIALLY_FILLED) {
+            throw new DomainException("Order cannot be replaced when status is " + status);
+        }
+        return new Order(orderId, accountId, symbol, side, orderType, newQuantity, Optional.of(newLimitPrice), status);
+    }
+
     public Order transitionTo(OrderStatus nextStatus) {
         Objects.requireNonNull(nextStatus, "Next order status must not be null");
         if (!canTransition(status, nextStatus)) {
@@ -114,4 +126,3 @@ public record Order(
         };
     }
 }
-

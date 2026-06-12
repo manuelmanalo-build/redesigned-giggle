@@ -56,7 +56,8 @@ The exact package names may evolve, but framework concerns should not leak into 
 19. The consumer writes a `Trade` when quantity is filled.
 20. The consumer updates `OrderStatus`.
 21. The consumer marks the inbox row `PROCESSED`, or stores failure diagnostics and rethrows for broker redelivery.
-22. Query APIs read current state and history from PostgreSQL.
+22. Cancel and replace APIs can amend open orders through the same application service and database transaction style.
+23. Query APIs read current state and history from PostgreSQL.
 
 ## Transaction Boundaries
 
@@ -87,6 +88,20 @@ Tradeoff:
 - A process crash after JMS send but before marking the row `PUBLISHED` can still cause a duplicate publish on retry.
 - Consumers therefore remain idempotent and must treat duplicate message delivery as normal distributed-system behavior.
 - Relay failures are observable in `outbox_events.attempt_count`, `last_error`, `next_attempt_at`, and `status`.
+
+### Cancel And Replace Transactions
+
+Cancel and replace requests use explicit database transactions:
+
+- `Idempotency-Key` is required for both operations.
+- The idempotency record is claimed before state changes, so equivalent retries replay the same order resource and conflicting retries return `409 Conflict`.
+- The order row is loaded with a pessimistic write lock.
+- Cancel is allowed only from `ACCEPTED` or `PARTIALLY_FILLED`; it updates status to `CANCELLED`, preserves `filled_quantity`, and creates a `CANCELLED` execution report.
+- Replace is allowed only for limit orders in `ACCEPTED` or `PARTIALLY_FILLED`; it updates the existing order row in place and creates a `REPLACED` execution report.
+- Replace requires the new quantity to be greater than or equal to `filled_quantity`.
+- Trades are never deleted by cancel or replace.
+
+Replace does not publish a JMS event in the MVP. The simulator does not maintain a live order book, so an in-place amendment plus execution-report audit is sufficient for the current scope. A production venue adapter would usually publish an amendment event and preserve explicit order versions.
 
 ### Message Consumption Transaction
 

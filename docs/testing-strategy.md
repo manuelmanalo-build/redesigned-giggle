@@ -43,6 +43,7 @@ Cover orchestration with mocked dependencies where useful:
 - Submit order creates idempotency record.
 - Duplicate idempotency key with same fingerprint returns the same order resource and response status.
 - Duplicate idempotency key with different fingerprint fails with conflict.
+- Cancel and replace use idempotency records and replay same-key retries safely.
 - Unknown or inactive account/instrument reference data rejects before order persistence.
 - Account and instrument reference-data APIs create, update, list, and retrieve rows used by order validation.
 - Accepted order is stored with a pending outbox event in the same transaction.
@@ -59,6 +60,7 @@ Tools:
 Cover REST behavior:
 
 - `POST /api/v1/orders` returns `201 Created` for valid accepted requests.
+- `POST /api/v1/orders/{orderId}/cancel` and `/replace` enforce `Idempotency-Key`.
 - Missing `Idempotency-Key` returns validation error.
 - Invalid enum values return `400 Bad Request`.
 - Invalid quantity or price returns field errors.
@@ -67,6 +69,7 @@ Cover REST behavior:
 - Error responses include `correlationId`.
 - REST responses include an `X-Correlation-Id` response header.
 - Global exception handling covers validation, domain exceptions, idempotency conflicts, and not-found responses.
+- Conflict handling covers invalid cancel/replace lifecycle states.
 - `/actuator/health` and custom Micrometer metrics are accessible in integration tests.
 
 Tools:
@@ -103,6 +106,7 @@ Run against embedded Artemis or an Artemis Testcontainer:
 - API integration tests verify accepted orders create one pending outbox event and invalid/conflicting submissions do not create publishable outbox rows.
 - API integration tests verify unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are hard rejected without order/idempotency/outbox persistence.
 - API integration tests verify account/instrument reference data can be created, updated, retrieved, and then used by order submission.
+- API integration tests verify cancel and replace success paths, terminal-state conflicts, partial-fill quantity guards, idempotent replay, and execution-report creation.
 - `OutboxRelayService` integration tests verify pending event publication, successful `PUBLISHED` marking, retry state on publish failure, max-attempt `FAILED` behavior, and skipping already-published rows.
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
 - A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.

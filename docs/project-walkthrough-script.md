@@ -185,6 +185,6 @@ The project now uses a transactional outbox. Order submission writes the order, 
 
 The project also uses a processed-message inbox. That makes duplicate observations and failed attempts queryable. The next production step would be broker-level DLQ integration: either a DLQ listener or an operational reconciliation job that marks poisoned messages `DEAD_LETTERED` and links them to broker diagnostics.
 
-After that, I would add real account and instrument tables, authentication and authorization, cancel/replace workflows, paginated search endpoints, partial-fill simulation, and load tests around queue depth, database locks, connection pool sizing, and p99 latency.
+After that, I would add authentication and authorization, explicit order amendment versions, amendment events for replace, paginated search endpoints, partial-fill simulation, and load tests around queue depth, database locks, connection pool sizing, and p99 latency.
 
 So my closing summary would be: this project is interview-ready as a compact backend system because it demonstrates the important decisions clearly. For production, I would harden the async reliability model, security model, and operational runbooks before scaling it further.

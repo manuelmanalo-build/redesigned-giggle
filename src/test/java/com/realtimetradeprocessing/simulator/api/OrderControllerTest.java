@@ -148,6 +148,73 @@ class OrderControllerTest {
     }
 
     @Test
+    void rejectsCancelWithoutIdempotencyKey() throws Exception {
+        mockMvc.perform(post("/api/v1/orders/order-1/cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "reason": "Client requested cancel"
+                    }
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void rejectsInvalidReplaceBody() throws Exception {
+        mockMvc.perform(post("/api/v1/orders/order-1/replace")
+                .header("Idempotency-Key", "idem-replace-validation")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 0,
+                      "newLimitPrice": -1.00,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void cancelsValidOrder() throws Exception {
+        OrderResponse response = orderResponse("order-1", OrderStatus.CANCELLED, 100, new BigDecimal("185.50"), 0);
+        when(orderApplicationService.cancelOrder(eq("order-1"), any(), eq("idem-cancel"))).thenReturn(new OrderSubmissionResult(200, response));
+
+        mockMvc.perform(post("/api/v1/orders/order-1/cancel")
+                .header("Idempotency-Key", "idem-cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "reason": "Client requested cancel"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.orderId").value("order-1"))
+            .andExpect(jsonPath("$.status").value("CANCELLED"));
+    }
+
+    @Test
+    void mapsReplaceConflict() throws Exception {
+        when(orderApplicationService.replaceOrder(eq("order-1"), any(), eq("idem-replace-conflict")))
+            .thenThrow(new ResourceConflictException("Order cannot be replaced when status is FILLED"));
+
+        mockMvc.perform(post("/api/v1/orders/order-1/replace")
+                .header("Idempotency-Key", "idem-replace-conflict")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 150,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.errorCode").value("RESOURCE_CONFLICT"))
+            .andExpect(jsonPath("$.message").value("Order cannot be replaced when status is FILLED"));
+    }
+
+    @Test
     void returnsExecutionReportList() throws Exception {
         when(orderApplicationService.getExecutionReports("order-1")).thenReturn(List.of());
 
@@ -168,5 +235,28 @@ class OrderControllerTest {
               "limitPrice": 185.50
             }
             """;
+    }
+
+    private static OrderResponse orderResponse(
+        String orderId,
+        OrderStatus status,
+        long quantity,
+        BigDecimal limitPrice,
+        long filledQuantity
+    ) {
+        return new OrderResponse(
+            orderId,
+            "CLIENT-123",
+            "ACC-001",
+            "AAPL",
+            OrderSide.BUY,
+            OrderType.LIMIT,
+            status,
+            quantity,
+            limitPrice,
+            filledQuantity,
+            Instant.parse("2026-06-09T17:00:00Z"),
+            Instant.parse("2026-06-09T17:00:00Z")
+        );
     }
 }

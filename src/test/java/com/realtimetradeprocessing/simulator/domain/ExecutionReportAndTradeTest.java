@@ -82,6 +82,33 @@ class ExecutionReportAndTradeTest {
     }
 
     @Test
+    void createsCancelledExecutionReport() {
+        ExecutionReport report = ExecutionReport.cancelled(
+            ExecutionReportId.of("exec-cancel"),
+            OrderId.of("order-1"),
+            "Client requested cancel"
+        );
+
+        assertThat(report.executionType()).isEqualTo(ExecutionType.CANCELLED);
+        assertThat(report.orderStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(report.message()).contains("Client requested cancel");
+    }
+
+    @Test
+    void createsReplacedExecutionReport() {
+        ExecutionReport report = ExecutionReport.replaced(
+            ExecutionReportId.of("exec-replace"),
+            OrderId.of("order-1"),
+            OrderStatus.ACCEPTED,
+            "Client amended order"
+        );
+
+        assertThat(report.executionType()).isEqualTo(ExecutionType.REPLACED);
+        assertThat(report.orderStatus()).isEqualTo(OrderStatus.ACCEPTED);
+        assertThat(report.message()).contains("Client amended order");
+    }
+
+    @Test
     void tradeRequiresFillExecutionReport() {
         ExecutionReport accepted = ExecutionReport.accepted(
             ExecutionReportId.of("exec-6"),
@@ -99,4 +126,3 @@ class ExecutionReportAndTradeTest {
             .hasMessageContaining("Trade requires a fill execution report");
     }
 }
-

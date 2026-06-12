@@ -236,6 +236,81 @@ Idempotent replay:
 - Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments return `400 Bad Request` with `VALIDATION_ERROR`.
 - Reference-data validation failures do not persist an order, idempotency record, or outbox event.
 
+### Cancel Order
+
+`POST /api/v1/orders/{orderId}/cancel`
+
+Cancels an open order. The request is idempotent by `Idempotency-Key`. The same transaction updates the order to `CANCELLED`, preserves any existing filled quantity, creates a `CANCELLED` execution report, and completes the idempotency record. Trades are never deleted.
+
+Required header:
+
+- `Idempotency-Key`: non-blank, at most 128 characters.
+
+Request body:
+
+```json
+{
+  "reason": "Client requested cancel"
+}
+```
+
+Validation and lifecycle rules:
+
+- Allowed when order status is `ACCEPTED` or `PARTIALLY_FILLED`.
+- Rejected with `409 Conflict` when order status is `FILLED`, `CANCELLED`, or `REJECTED`.
+- Missing order returns `404 Not Found`.
+- `reason` is optional and capped at 500 characters.
+- Same `Idempotency-Key` and same cancel request returns the same logical order resource.
+- Same `Idempotency-Key` and different cancel request returns `409 Conflict`.
+
+Successful response:
+
+- Status: `200 OK`
+- Body: current `OrderResponse` with status `CANCELLED`.
+
+### Replace Order
+
+`POST /api/v1/orders/{orderId}/replace`
+
+Amends an open limit order in place. The request is idempotent by `Idempotency-Key`. The same transaction updates quantity and limit price, creates a `REPLACED` execution report, and completes the idempotency record.
+
+Required header:
+
+- `Idempotency-Key`: non-blank, at most 128 characters.
+
+Request body:
+
+```json
+{
+  "newQuantity": 150,
+  "newLimitPrice": 186.25,
+  "reason": "Client amended order"
+}
+```
+
+Validation and lifecycle rules:
+
+- Allowed when order status is `ACCEPTED` or `PARTIALLY_FILLED`.
+- Rejected with `409 Conflict` when order status is `FILLED`, `CANCELLED`, or `REJECTED`.
+- Rejected with `409 Conflict` for market orders. The MVP only supports limit-order replacement.
+- `newQuantity` is required and must be positive.
+- `newQuantity` must be greater than or equal to already filled quantity.
+- `newLimitPrice` is optional for limit orders; when omitted, the current limit price is preserved.
+- Missing order returns `404 Not Found`.
+- `reason` is optional and capped at 500 characters.
+- Same `Idempotency-Key` and same replace request returns the same logical order resource.
+- Same `Idempotency-Key` and different replace request returns `409 Conflict`.
+
+Simplification:
+
+- Replace updates the existing order row in place rather than creating explicit order versions.
+- Replace does not publish a new JMS event in the MVP. A production order book or venue adapter would usually emit an amendment event and re-evaluate routing/execution.
+
+Successful response:
+
+- Status: `200 OK`
+- Body: current `OrderResponse` with updated quantity and limit price.
+
 ### Get Order
 
 `GET /api/v1/orders/{orderId}`
@@ -437,6 +512,6 @@ All API errors should use a consistent response shape:
 - `201 Created`: order persisted and accepted.
 - `400 Bad Request`: malformed request or field validation error.
 - `404 Not Found`: requested resource does not exist.
-- `409 Conflict`: idempotency key conflict, duplicate account, or duplicate instrument.
+- `409 Conflict`: idempotency key conflict, duplicate account/instrument, or invalid cancel/replace lifecycle state.
 - `422 Unprocessable Entity`: optional domain-rule failure status if adopted.
 - `500 Internal Server Error`: unexpected failure.

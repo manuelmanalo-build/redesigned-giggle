@@ -92,8 +92,36 @@ public record ExecutionReport(
         );
     }
 
+    public static ExecutionReport cancelled(ExecutionReportId executionReportId, OrderId orderId, String message) {
+        return new ExecutionReport(
+            executionReportId,
+            orderId,
+            ExecutionType.CANCELLED,
+            OrderStatus.CANCELLED,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.ofNullable(message)
+        );
+    }
+
+    public static ExecutionReport replaced(
+        ExecutionReportId executionReportId,
+        OrderId orderId,
+        OrderStatus orderStatus,
+        String message
+    ) {
+        return new ExecutionReport(
+            executionReportId,
+            orderId,
+            ExecutionType.REPLACED,
+            orderStatus,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.ofNullable(message)
+        );
+    }
+
     public boolean isFill() {
         return executionType == ExecutionType.FILL || executionType == ExecutionType.PARTIAL_FILL;
     }
 }
-

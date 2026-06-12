@@ -98,6 +98,33 @@ class OrderTest {
     }
 
     @Test
+    void supportsReplacingAcceptedAndPartiallyFilledLimitOrders() {
+        Order acceptedReplacement = validLimitOrder().accept().replaceLimit(Quantity.of(150), Price.of("186.25"));
+        Order partialReplacement = validLimitOrder().accept().partiallyFill().replaceLimit(Quantity.of(120), Price.of("187.10"));
+
+        assertThat(acceptedReplacement.status()).isEqualTo(OrderStatus.ACCEPTED);
+        assertThat(acceptedReplacement.quantity()).isEqualTo(Quantity.of(150));
+        assertThat(acceptedReplacement.limitPrice()).contains(Price.of("186.25"));
+        assertThat(partialReplacement.status()).isEqualTo(OrderStatus.PARTIALLY_FILLED);
+        assertThat(partialReplacement.quantity()).isEqualTo(Quantity.of(120));
+        assertThat(partialReplacement.limitPrice()).contains(Price.of("187.10"));
+    }
+
+    @Test
+    void rejectsReplacingMarketOrder() {
+        assertThatThrownBy(() -> validMarketOrder().accept().replaceLimit(Quantity.of(150), Price.of("186.25")))
+            .isInstanceOf(DomainException.class)
+            .hasMessageContaining("Only limit orders can be replaced");
+    }
+
+    @Test
+    void rejectsReplacingTerminalOrder() {
+        assertThatThrownBy(() -> validLimitOrder().accept().fill().replaceLimit(Quantity.of(150), Price.of("186.25")))
+            .isInstanceOf(DomainException.class)
+            .hasMessageContaining("Order cannot be replaced when status is FILLED");
+    }
+
+    @Test
     void rejectsInvalidStateTransitions() {
         assertThatThrownBy(() -> validMarketOrder().fill())
             .isInstanceOf(DomainException.class)
@@ -130,5 +157,15 @@ class OrderTest {
             Quantity.of(100)
         );
     }
-}
 
+    private static Order validLimitOrder() {
+        return Order.limit(
+            OrderId.of("order-1"),
+            AccountId.of("account-1"),
+            InstrumentSymbol.of("AAPL"),
+            OrderSide.BUY,
+            Quantity.of(100),
+            Price.of("185.25")
+        );
+    }
+}

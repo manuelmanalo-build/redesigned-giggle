@@ -132,6 +132,17 @@ public class OrderEntity {
         this.updatedAt = updatedAt;
     }
 
+    public void markCancelled(Instant updatedAt) {
+        this.status = OrderStatus.CANCELLED;
+        this.updatedAt = updatedAt;
+    }
+
+    public void replaceLimit(long quantity, BigDecimal limitPrice, Instant updatedAt) {
+        this.quantity = quantity;
+        this.limitPrice = limitPrice;
+        this.updatedAt = updatedAt;
+    }
+
     public void touch(Instant updatedAt) {
         this.updatedAt = updatedAt;
     }

@@ -5,6 +5,6 @@ public enum ExecutionType {
     REJECTED,
     PARTIAL_FILL,
     FILL,
+    REPLACED,
     CANCELLED
 }
-

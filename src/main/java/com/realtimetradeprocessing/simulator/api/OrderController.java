@@ -41,6 +41,26 @@ public class OrderController {
         return ResponseEntity.status(result.responseStatus()).body(result.order());
     }
 
+    @PostMapping("/{orderId}/cancel")
+    ResponseEntity<OrderResponse> cancelOrder(
+        @PathVariable String orderId,
+        @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 128) String idempotencyKey,
+        @Valid @RequestBody CancelOrderRequest request
+    ) {
+        OrderSubmissionResult result = orderApplicationService.cancelOrder(orderId, request, idempotencyKey);
+        return ResponseEntity.status(result.responseStatus()).body(result.order());
+    }
+
+    @PostMapping("/{orderId}/replace")
+    ResponseEntity<OrderResponse> replaceOrder(
+        @PathVariable String orderId,
+        @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 128) String idempotencyKey,
+        @Valid @RequestBody ReplaceOrderRequest request
+    ) {
+        OrderSubmissionResult result = orderApplicationService.replaceOrder(orderId, request, idempotencyKey);
+        return ResponseEntity.status(result.responseStatus()).body(result.order());
+    }
+
     @GetMapping("/{orderId}")
     OrderResponse getOrder(@PathVariable String orderId) {
         return orderApplicationService.getOrder(orderId);

@@ -45,11 +45,15 @@ import com.realtimetradeprocessing.simulator.domain.Quantity;
 import com.realtimetradeprocessing.simulator.domain.Trade;
 import com.realtimetradeprocessing.simulator.domain.TradeId;
 import com.realtimetradeprocessing.simulator.domain.AccountId;
+import com.realtimetradeprocessing.simulator.domain.ExecutionType;
 import com.realtimetradeprocessing.simulator.domain.InstrumentSymbol;
 import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
+import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OutboxEventStatus;
 import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
+import com.realtimetradeprocessing.simulator.domain.OrderStatus;
+import com.realtimetradeprocessing.simulator.domain.OrderType;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
@@ -582,6 +586,270 @@ class OrderApiIntegrationTest {
     }
 
     @Test
+    void cancelsAcceptedOrderAndCreatesExecutionReport() throws Exception {
+        OrderEntity order = saveOrder("order-cancel-accepted", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-accepted")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "reason": "Client requested cancel"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.orderId").value(order.getId()))
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.filledQuantity").value(0));
+
+        assertThat(orderRepository.findById(order.getId()).orElseThrow().getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(order.getId()))
+            .singleElement()
+            .satisfies(report -> {
+                assertThat(report.getExecutionType()).isEqualTo(ExecutionType.CANCELLED);
+                assertThat(report.getOrderStatus()).isEqualTo(OrderStatus.CANCELLED);
+                assertThat(report.getMessage()).isEqualTo("Client requested cancel");
+            });
+    }
+
+    @Test
+    void cancelsPartiallyFilledOrderAndPreservesFilledQuantity() throws Exception {
+        OrderEntity order = saveOrder(
+            "order-cancel-partial",
+            OrderStatus.PARTIALLY_FILLED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            40
+        );
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-partial")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.filledQuantity").value(40));
+
+        OrderEntity cancelled = orderRepository.findById(order.getId()).orElseThrow();
+        assertThat(cancelled.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(cancelled.getFilledQuantity()).isEqualTo(40);
+    }
+
+    @Test
+    void rejectsCancelForFilledOrder() throws Exception {
+        OrderEntity order = saveOrder("order-cancel-filled", OrderStatus.FILLED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 100);
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-filled")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.errorCode").value("RESOURCE_CONFLICT"))
+            .andExpect(jsonPath("$.message").value("Order cannot be cancelled when status is FILLED"));
+    }
+
+    @Test
+    void cancelReplayIsIdempotentButNewCancelForCancelledOrderFails() throws Exception {
+        OrderEntity order = saveOrder("order-cancel-idempotent", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        String body = """
+            {
+              "reason": "Client requested cancel"
+            }
+            """;
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-after-cancelled")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("Order cannot be cancelled when status is CANCELLED"));
+
+        assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(order.getId()))
+            .filteredOn(report -> report.getExecutionType() == ExecutionType.CANCELLED)
+            .hasSize(1);
+    }
+
+    @Test
+    void cancelReturnsConflictForSameIdempotencyKeyAndDifferentRequest() throws Exception {
+        OrderEntity order = saveOrder("order-cancel-conflict", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-conflict")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "reason": "Client requested cancel"
+                    }
+                    """))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", order.getId())
+                .header("Idempotency-Key", "idem-cancel-conflict")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "reason": "Different reason"
+                    }
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"));
+    }
+
+    @Test
+    void replacesAcceptedLimitOrderAndCreatesExecutionReport() throws Exception {
+        OrderEntity order = saveOrder("order-replace-accepted", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-accepted")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 150,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("ACCEPTED"))
+            .andExpect(jsonPath("$.quantity").value(150))
+            .andExpect(jsonPath("$.limitPrice").value(186.25));
+
+        OrderEntity replaced = orderRepository.findById(order.getId()).orElseThrow();
+        assertThat(replaced.getQuantity()).isEqualTo(150);
+        assertThat(replaced.getLimitPrice()).isEqualByComparingTo("186.25");
+        assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(order.getId()))
+            .singleElement()
+            .satisfies(report -> {
+                assertThat(report.getExecutionType()).isEqualTo(ExecutionType.REPLACED);
+                assertThat(report.getOrderStatus()).isEqualTo(OrderStatus.ACCEPTED);
+                assertThat(report.getMessage()).contains("Client amended order");
+            });
+    }
+
+    @Test
+    void replacesPartiallyFilledLimitOrderWhenQuantityCoversFill() throws Exception {
+        OrderEntity order = saveOrder(
+            "order-replace-partial",
+            OrderStatus.PARTIALLY_FILLED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            40
+        );
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-partial")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 60,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PARTIALLY_FILLED"))
+            .andExpect(jsonPath("$.quantity").value(60))
+            .andExpect(jsonPath("$.filledQuantity").value(40));
+    }
+
+    @Test
+    void rejectsReplaceWhenNewQuantityIsBelowFilledQuantity() throws Exception {
+        OrderEntity order = saveOrder(
+            "order-replace-below-filled",
+            OrderStatus.PARTIALLY_FILLED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            40
+        );
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-below-filled")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 20,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("Replacement quantity must be greater than or equal to filled quantity"));
+    }
+
+    @Test
+    void rejectsReplaceForTerminalOrMarketOrders() throws Exception {
+        OrderEntity filled = saveOrder("order-replace-filled", OrderStatus.FILLED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 100);
+        OrderEntity cancelled = saveOrder("order-replace-cancelled", OrderStatus.CANCELLED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        OrderEntity rejected = saveOrder("order-replace-rejected", OrderStatus.REJECTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        OrderEntity market = saveOrder("order-replace-market", OrderStatus.ACCEPTED, OrderType.MARKET, 100, null, 0);
+
+        assertReplaceConflict(filled.getId(), "idem-replace-filled", "Order cannot be replaced when status is FILLED");
+        assertReplaceConflict(cancelled.getId(), "idem-replace-cancelled", "Order cannot be replaced when status is CANCELLED");
+        assertReplaceConflict(rejected.getId(), "idem-replace-rejected", "Order cannot be replaced when status is REJECTED");
+        assertReplaceConflict(market.getId(), "idem-replace-market", "Only limit orders can be replaced");
+    }
+
+    @Test
+    void replaceReplayIsIdempotentAndDifferentRequestConflicts() throws Exception {
+        OrderEntity order = saveOrder("order-replace-idempotent", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        String body = """
+            {
+              "newQuantity": 150,
+              "newLimitPrice": 186.25,
+              "reason": "Client amended order"
+            }
+            """;
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.quantity").value(150));
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.quantity").value(150));
+
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
+                .header("Idempotency-Key", "idem-replace-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 175,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"));
+
+        assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(order.getId()))
+            .filteredOn(report -> report.getExecutionType() == ExecutionType.REPLACED)
+            .hasSize(1);
+    }
+
+    @Test
     void exposesHealthAndCustomMetrics() throws Exception {
         clearInvocations(orderEventPublisher);
 
@@ -650,5 +918,46 @@ class OrderApiIntegrationTest {
         assertThat(idempotencyRecordRepository.count()).isEqualTo(idempotencyCount);
         assertThat(outboxEventRepository.count()).isEqualTo(outboxCount);
         verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+    }
+
+    private OrderEntity saveOrder(
+        String orderId,
+        OrderStatus status,
+        OrderType type,
+        long quantity,
+        BigDecimal limitPrice,
+        long filledQuantity
+    ) {
+        Instant now = Instant.parse("2026-06-12T12:00:00Z");
+        return orderRepository.saveAndFlush(new OrderEntity(
+            orderId,
+            "CLIENT-" + orderId,
+            "ACC-001",
+            "AAPL",
+            OrderSide.BUY,
+            type,
+            status,
+            quantity,
+            limitPrice,
+            filledQuantity,
+            now,
+            now
+        ));
+    }
+
+    private void assertReplaceConflict(String orderId, String idempotencyKey, String message) throws Exception {
+        mockMvc.perform(post("/api/v1/orders/{orderId}/replace", orderId)
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "newQuantity": 150,
+                      "newLimitPrice": 186.25,
+                      "reason": "Client amended order"
+                    }
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.errorCode").value("RESOURCE_CONFLICT"))
+            .andExpect(jsonPath("$.message").value(message));
     }
 }

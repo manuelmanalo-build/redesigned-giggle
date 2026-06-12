@@ -2,7 +2,7 @@
 
 An interview-prep Java 21 backend project that simulates a simplified real-time order processing platform.
 
-The system accepts orders through REST, validates and persists them, writes order-submitted events to a transactional outbox, relays those events to JMS, processes them asynchronously, simulates executions, creates execution reports and trades, updates order state, and exposes query APIs.
+The system accepts orders through REST, validates and persists them, writes order-submitted events to a transactional outbox, relays those events to JMS, processes them asynchronously, simulates executions, creates execution reports and trades, supports cancel/replace workflows, updates order state, and exposes query APIs.
 
 The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, transactional outbox publication, processed-message inbox diagnostics, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
 
@@ -15,6 +15,7 @@ The MVP models:
 - Seeded account and instrument reference data used to validate order submissions.
 - REST reference-data APIs for reading, creating, and updating accounts and instruments.
 - Idempotent order submission.
+- Idempotent cancel and replace workflows for open orders.
 - Reference-data validation for active accounts and active instruments.
 - SQL-backed order persistence.
 - Transactional outbox storage and relay for reliable JMS publication.
@@ -22,6 +23,7 @@ The MVP models:
 - Processed-message inbox tracking for consumer idempotency and retry/DLQ diagnostics.
 - Deterministic execution simulation.
 - Execution report creation.
+- Execution report audit records for cancel and replace operations.
 - Trade creation for filled orders. Partial-fill states are modeled as a planned lifecycle extension.
 - Order status updates.
 - REST reads for orders, execution reports, and trades.
