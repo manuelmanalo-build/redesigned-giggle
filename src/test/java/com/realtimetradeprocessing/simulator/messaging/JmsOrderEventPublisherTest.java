@@ -57,7 +57,7 @@ class JmsOrderEventPublisherTest {
         assertThat(payloadCaptor.getValue()).contains("\"eventId\":\"event-1\"");
         assertThat(payloadCaptor.getValue()).contains("\"orderId\":\"order-1\"");
         assertThat(payloadCaptor.getValue()).contains("\"correlationId\":\"corr-1\"");
-        verify(textMessage).setStringProperty("eventType", JmsOrderEventPublisher.EVENT_TYPE);
+        verify(textMessage).setStringProperty("eventType", OrderSubmittedEvent.EVENT_TYPE);
         verify(textMessage).setStringProperty("eventId", "event-1");
         verify(textMessage).setStringProperty("orderId", "order-1");
         verify(textMessage).setStringProperty("correlationId", "corr-1");

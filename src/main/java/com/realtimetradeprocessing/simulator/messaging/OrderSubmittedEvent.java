@@ -19,4 +19,5 @@ public record OrderSubmittedEvent(
     String correlationId,
     Instant createdAt
 ) {
+    public static final String EVENT_TYPE = "OrderSubmittedEvent";
 }

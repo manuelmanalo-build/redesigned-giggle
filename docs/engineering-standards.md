@@ -44,6 +44,7 @@ These standards guide implementation once code is added. They should keep the pr
 - Avoid leaking JPA entities into API responses or JMS payloads.
 - Use optimistic locking or guarded updates for concurrent order state changes.
 - Store timestamps in UTC.
+- Integration events that must follow database writes should be persisted through the transactional outbox in the same database transaction as the aggregate change.
 
 ## Messaging Standards
 
@@ -51,7 +52,11 @@ These standards guide implementation once code is added. They should keep the pr
 - Use durable queues for order processing.
 - Initial destination: `order.submitted`.
 - Include `eventId`, `orderId`, client order/account/symbol fields, order terms, `correlationId`, and creation time in event payloads.
+- Do not publish order-submitted events directly from the REST order submission transaction.
+- Persist order-submitted events to `outbox_events`; let the relay own JMS publication, retry state, and failure visibility.
+- Keep JMS-specific code outside domain logic and behind messaging abstractions.
 - Make consumers idempotent.
+- Treat duplicate delivery as normal, including the crash-recovery case where the relay publishes to JMS but crashes before marking the outbox row `PUBLISHED`.
 - Throw on retryable failures so broker redelivery can occur.
 - Make DLQ behavior documented and configurable.
 - Version message payloads.
@@ -62,6 +67,7 @@ These standards guide implementation once code is added. They should keep the pr
 - Message consumption idempotency is based on message ID.
 - Protect idempotency with unique database constraints and claim-first writes, not check-then-insert flows.
 - Replays must not create duplicate orders, execution reports, or trades.
+- Relay retries must not create new outbox rows for the same accepted order.
 - Conflicting reuse of an idempotency key must return `409 Conflict`.
 
 ## Observability Standards

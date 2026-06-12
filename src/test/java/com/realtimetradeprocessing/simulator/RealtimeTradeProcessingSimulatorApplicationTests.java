@@ -7,6 +7,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 
@@ -16,7 +17,8 @@ import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
         + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration,"
         + "org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
-    "trade.messaging.jms-listener-enabled=false"
+    "trade.messaging.jms-listener-enabled=false",
+    "trade.outbox.scheduling-enabled=false"
 })
 class RealtimeTradeProcessingSimulatorApplicationTests {
 
@@ -31,6 +33,9 @@ class RealtimeTradeProcessingSimulatorApplicationTests {
 
     @MockBean
     private IdempotencyRecordJpaRepository idempotencyRecordRepository;
+
+    @MockBean
+    private OutboxEventJpaRepository outboxEventRepository;
 
     @MockBean
     private OrderEventPublisher orderEventPublisher;

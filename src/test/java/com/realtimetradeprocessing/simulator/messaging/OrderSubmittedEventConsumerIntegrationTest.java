@@ -3,8 +3,6 @@ package com.realtimetradeprocessing.simulator.messaging;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -12,7 +10,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +31,7 @@ import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportE
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -42,6 +40,7 @@ import io.micrometer.core.instrument.MeterRegistry;
     "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
     "trade.messaging.jms-publisher-enabled=false",
     "trade.messaging.jms-listener-enabled=false",
+    "trade.outbox.scheduling-enabled=false",
     "trade.execution.simulated-market-price=100.00"
 })
 @AutoConfigureMockMvc
@@ -80,6 +79,9 @@ class OrderSubmittedEventConsumerIntegrationTest {
 
     @Autowired
     private TradeJpaRepository tradeRepository;
+
+    @Autowired
+    private OutboxEventJpaRepository outboxEventRepository;
 
     @Autowired
     private MeterRegistry meterRegistry;
@@ -194,18 +196,21 @@ class OrderSubmittedEventConsumerIntegrationTest {
     }
 
     private OrderSubmittedEvent submitAndCaptureEvent(String idempotencyKey, String requestBody) throws Exception {
-        clearInvocations(orderEventPublisher);
-
-        mockMvc.perform(post("/api/v1/orders")
+        String response = mockMvc.perform(post("/api/v1/orders")
                 .header("Idempotency-Key", idempotencyKey)
                 .header("X-Correlation-Id", "corr-" + idempotencyKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(requestBody))
-            .andExpect(status().isCreated());
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
 
-        ArgumentCaptor<OrderSubmittedEvent> eventCaptor = ArgumentCaptor.forClass(OrderSubmittedEvent.class);
-        verify(orderEventPublisher).publishOrderSubmitted(eventCaptor.capture());
-        return eventCaptor.getValue();
+        String orderId = objectMapper.readTree(response).get("orderId").asText();
+        String payload = outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(orderId)
+            .getFirst()
+            .getPayload();
+        return objectMapper.readValue(payload, OrderSubmittedEvent.class);
     }
 
     private static void assertFillReport(ExecutionReportEntity report, String orderId) {

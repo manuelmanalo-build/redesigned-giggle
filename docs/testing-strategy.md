@@ -4,7 +4,7 @@
 
 The project should be built test-first where practical. Tests must prove the order submission, persistence, JMS processing, execution report, trade creation, idempotency, and error-handling behavior.
 
-The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, JMS publisher unit tests, PostgreSQL-backed persistence/API/consumer integration tests, and an Artemis-backed end-to-end publish/consume test.
+The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, outbox writer tests, JMS publisher unit tests, PostgreSQL-backed persistence/API/consumer/relay integration tests, and an Artemis-backed end-to-end publish/consume test.
 
 ## Test Commands
 
@@ -43,8 +43,8 @@ Cover orchestration with mocked dependencies where useful:
 - Submit order creates idempotency record.
 - Duplicate idempotency key with same fingerprint returns the same order resource and response status.
 - Duplicate idempotency key with different fingerprint fails with conflict.
-- Accepted order is stored before event publication is requested.
-- Messaging failure behavior is explicit and tested according to the chosen outbox or direct-publish design.
+- Accepted order is stored with a pending outbox event in the same transaction.
+- Messaging failure behavior is captured through outbox relay retry metadata.
 
 Tools:
 
@@ -79,6 +79,7 @@ Run against PostgreSQL Testcontainers:
 - Core persistence tests currently verify save/find behavior for orders, execution reports, and trades.
 - Trade persistence verifies the required link from each trade to the execution report that created it.
 - Table constraints enforce unique idempotency keys.
+- Outbox table constraints enforce valid statuses and non-negative attempt counts.
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
 - Pessimistic row locking and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
@@ -94,9 +95,11 @@ Tools:
 
 Run against embedded Artemis or an Artemis Testcontainer:
 
+- `OutboxEventWriter` serializes `OrderSubmittedEvent` into `outbox_events`.
+- API integration tests verify accepted orders create one pending outbox event and invalid/conflicting submissions do not create publishable outbox rows.
+- `OutboxRelayService` integration tests verify pending event publication, successful `PUBLISHED` marking, retry state on publish failure, max-attempt `FAILED` behavior, and skipping already-published rows.
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
-- Current API integration tests verify the `OrderEventPublisher` seam without starting a broker.
-- A broker-backed Artemis Testcontainers test verifies that REST order submission publishes a message that the asynchronous listener consumes.
+- A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.
 - Current consumer integration tests invoke `OrderSubmittedEventConsumer` directly against PostgreSQL.
 - Consumer tests verify market-order fills, marketable limit fills, non-marketable limit no-fills, missing-order safety, and duplicate delivery idempotency.
 - Retryable failures trigger redelivery behavior.

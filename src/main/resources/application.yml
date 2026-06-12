@@ -50,5 +50,12 @@ trade:
   messaging:
     order-submitted-queue: ${TRADE_ORDER_SUBMITTED_QUEUE:order.submitted}
     jms-listener-enabled: ${TRADE_JMS_LISTENER_ENABLED:true}
+    jms-publisher-enabled: ${TRADE_JMS_PUBLISHER_ENABLED:true}
+  outbox:
+    scheduling-enabled: ${TRADE_OUTBOX_SCHEDULING_ENABLED:true}
+    relay-interval-ms: ${TRADE_OUTBOX_RELAY_INTERVAL_MS:1000}
+    batch-size: ${TRADE_OUTBOX_BATCH_SIZE:25}
+    max-attempts: ${TRADE_OUTBOX_MAX_ATTEMPTS:5}
+    initial-backoff-ms: ${TRADE_OUTBOX_INITIAL_BACKOFF_MS:1000}
   execution:
     simulated-market-price: ${TRADE_SIMULATED_MARKET_PRICE:100.00}

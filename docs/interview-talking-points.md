@@ -2,17 +2,17 @@
 
 ## 1. 30-Second Project Summary
 
-This project is a Java 21 Spring Boot backend that simulates a simplified real-time trade processing platform. A client submits an order through `POST /api/v1/orders`; the service validates it, stores it in PostgreSQL, records an idempotency claim, and publishes an `OrderSubmittedEvent` to the `order.submitted` JMS queue after the database transaction commits. An asynchronous consumer receives the event, locks the order row, simulates execution, writes an execution report, creates a trade for fills, and updates order state. The project demonstrates domain modeling, REST APIs, SQL constraints, JMS messaging, concurrency-safe processing, observability, Testcontainers-based integration tests, CI, and cloud deployment tradeoffs.
+This project is a Java 21 Spring Boot backend that simulates a simplified real-time trade processing platform. A client submits an order through `POST /api/v1/orders`; the service validates it, stores it in PostgreSQL, records an idempotency claim, and writes an `OrderSubmittedEvent` to a transactional outbox in the same database transaction. A relay publishes pending outbox events to the `order.submitted` JMS queue, and an asynchronous consumer receives the event, locks the order row, simulates execution, writes an execution report, creates a trade for fills, and updates order state. The project demonstrates domain modeling, REST APIs, SQL constraints, reliable messaging patterns, concurrency-safe processing, observability, Testcontainers-based integration tests, CI, and cloud deployment tradeoffs.
 
 ## 2. Architecture Explanation
 
 The codebase is a modular monolith with explicit package boundaries:
 
 - `api`: `OrderController`, request/response DTOs, error responses, and `GlobalApiExceptionHandler`.
-- `application`: orchestration services such as `OrderApplicationService`, `OrderExecutionProcessor`, and `ExecutionSimulator`.
+- `application`: orchestration services such as `OrderApplicationService`, `OutboxEventWriter`, `OrderExecutionProcessor`, and `ExecutionSimulator`.
 - `domain`: pure Java domain records and enums such as `Order`, `Quantity`, `Price`, `ExecutionReport`, and `Trade`.
 - `persistence`: JPA entities, Spring Data repositories, and Flyway-managed schema.
-- `messaging`: JMS event payload, publisher abstraction, publisher implementation, and consumer.
+- `messaging`: outbox relay/scheduler, JMS event payload, publisher abstraction, publisher implementation, and consumer.
 - `observability`: correlation ID filter and Micrometer metrics.
 - `fix`: simplified educational FIX parser and New Order Single mapper.
 
@@ -23,11 +23,12 @@ Core flow:
 3. `SubmitOrderRequest` validation handles request shape.
 4. `OrderApplicationService.submitOrder` builds a domain `Order`, accepts it, and computes a SHA-256 request fingerprint.
 5. `IdempotencyRecordJpaRepository.claimSubmission` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
-6. The service saves the order and completes the idempotency record in one Spring transaction.
-7. `TransactionSynchronization.afterCommit` publishes `OrderSubmittedEvent` only after the database commit.
-8. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderExecutionProcessor`.
-9. `OrderExecutionProcessor` uses a pessimistic write lock, deterministic execution-report IDs, and database constraints to avoid duplicate side effects.
-10. Query endpoints return order state, execution reports, and trades from PostgreSQL.
+6. The service saves the order, completes the idempotency record, and inserts a pending outbox row in one Spring transaction.
+7. `OutboxRelayService` polls due pending rows, publishes the JSON event to JMS, and marks successful rows `PUBLISHED`.
+8. Failed relay attempts increment `attempt_count`, store `last_error`, and set `next_attempt_at` for retry.
+9. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderExecutionProcessor`.
+10. `OrderExecutionProcessor` uses a pessimistic write lock, deterministic execution-report IDs, and database constraints to avoid duplicate side effects.
+11. Query endpoints return order state, execution reports, and trades from PostgreSQL.
 
 The architecture is deliberately not split into microservices. For interview purposes, the value is in the clarity of boundaries and failure-mode discussion, not distributed complexity for its own sake.
 
@@ -38,7 +39,7 @@ The architecture is deliberately not split into microservices. For interview pur
 - Domain invariants live in domain constructors and methods, not controllers. For example, `Order` rejects limit orders without price and market orders with price.
 - `Order.transitionTo` centralizes valid state transitions and throws `DomainException` for invalid lifecycle movement.
 - `Trade.fromExecutionReport` expresses that trades are derived from fill execution reports.
-- Interfaces provide testable substitution points: `OrderEventPublisher` decouples application logic from `JmsTemplate`, and `ExecutionSimulator` decouples execution rules from the consumer.
+- Interfaces provide testable substitution points: `OrderEventPublisher` decouples relay logic from `JmsTemplate`, and `ExecutionSimulator` decouples execution rules from the consumer.
 - DTOs, domain objects, JMS payloads, and JPA entities are separate. That keeps API, persistence, messaging, and business rules from leaking into each other.
 - Constructor injection is used for Spring dependencies.
 
@@ -48,9 +49,10 @@ The domain model is not just getters and setters. It encodes rules around order 
 
 ## 4. Data Structures Used And Why
 
-- Relational tables store authoritative state: `orders`, `execution_reports`, `trades`, and `idempotency_records`.
+- Relational tables store authoritative state: `orders`, `execution_reports`, `trades`, `idempotency_records`, and `outbox_events`.
 - Primary keys enforce identity for orders, execution reports, trades, and idempotency records.
 - `idempotency_records.idempotency_key` acts as a deduplication set for client retries.
+- `outbox_events(status, next_attempt_at, created_at)` acts as a durable work queue for integration-event relay.
 - Deterministic execution-report and trade IDs derived from event IDs make duplicate message handling idempotent.
 - `trades.execution_report_id` is unique, enforcing one trade per fill execution report.
 - Indexes support expected lookup paths:
@@ -58,6 +60,8 @@ The domain model is not just getters and setters. It encodes rules around order 
   - `orders(account_id)`, `orders(symbol)`, and `orders(status)` for operational filtering.
   - `execution_reports(order_id)` and `trades(order_id)` for order lifecycle history.
   - `trades(execution_report_id)` for the fill-report-to-trade invariant.
+  - `outbox_events(status, next_attempt_at, created_at)` for due-event polling.
+  - `outbox_events(aggregate_type, aggregate_id)` for diagnostics by order.
 - `LinkedHashMap` in the simplified FIX parser preserves tag insertion order, which is useful for deterministic parsing behavior and debugging.
 - Queues provide asynchronous buffering between order submission and execution processing.
 
@@ -66,6 +70,7 @@ The domain model is not just getters and setters. It encodes rules around order 
 - REST requests are handled concurrently by the web container, so idempotency cannot rely on in-memory checks.
 - Client retry concurrency is handled at the database layer using `INSERT ... ON CONFLICT DO NOTHING` in `IdempotencyRecordJpaRepository.claimSubmission`.
 - JMS consumers may run concurrently. The listener concurrency is configurable through Spring JMS settings.
+- Outbox relay polling can also run concurrently across instances; `FOR UPDATE SKIP LOCKED` prevents normal duplicate work on the same pending outbox row.
 - `OrderJpaRepository.findByIdForUpdate` uses `PESSIMISTIC_WRITE` to serialize processing for the same order.
 - `OrderExecutionProcessor` checks for an existing deterministic execution report before and after acquiring the order lock, reducing duplicate-message race windows.
 - JMS listener sessions are transacted in `JmsListenerConfig`, so processing failures can roll back acknowledgement and allow redelivery.
@@ -106,7 +111,7 @@ Design points:
 - Errors use a consistent `ApiErrorResponse` shape through `GlobalApiExceptionHandler`.
 - `409 Conflict` is used when an idempotency key is reused with a different normalized request.
 - Query endpoints verify that the order exists before returning execution reports or trades.
-- The POST currently returns `201 Created` after persistence and event registration; a future asynchronous API could return `202 Accepted` if execution ownership moves further into the async layer.
+- The POST currently returns `201 Created` after persistence and outbox insertion; a future asynchronous API could return `202 Accepted` if execution ownership moves further into the async layer.
 
 Tradeoff:
 
@@ -119,6 +124,7 @@ PostgreSQL is the source of truth. Flyway migrations define and harden the schem
 - `V2__create_core_persistence_tables.sql` creates `orders`, `execution_reports`, `trades`, and `idempotency_records`.
 - `V3__harden_core_constraints.sql` adds enum checks, market/limit price consistency, execution-report fill-field consistency, and response-status checks.
 - `V4__link_trades_to_execution_reports.sql` adds `trades.execution_report_id`, a foreign key, a unique constraint, and an index.
+- `V5__create_outbox_events.sql` creates the transactional outbox table and relay indexes.
 
 Important constraints:
 
@@ -130,11 +136,14 @@ Important constraints:
 - Non-fill execution reports must not have fill fields.
 - Trades require positive quantity and price.
 - One execution report can create at most one trade.
+- Outbox status must be `PENDING`, `PUBLISHED`, or `FAILED`.
+- Outbox attempt count cannot be negative.
 
 Transaction boundaries:
 
-- Order submission stores the order and idempotency record in one `@Transactional` method.
-- Event publication is registered with `TransactionSynchronization.afterCommit`, so rolled-back order inserts are not published.
+- Order submission stores the order, idempotency record, and outbox event in one `@Transactional` method.
+- The REST request does not publish directly to JMS.
+- The outbox relay locks due rows, publishes to JMS, and marks rows `PUBLISHED` or records retry state in its own transaction.
 - Message processing writes execution report, trade, and order status update in one `@Transactional` method.
 - Read endpoints use `@Transactional(readOnly = true)`.
 
@@ -148,6 +157,9 @@ Messaging components:
 
 - `OrderEventPublisher`: application-facing abstraction.
 - `JmsOrderEventPublisher`: Jackson JSON serialization and JMS send through `JmsTemplate`.
+- `OutboxEventWriter`: serializes order-submitted events into `outbox_events`.
+- `OutboxRelayService`: polls pending outbox rows, publishes them, and records success/failure state.
+- `OutboxRelayScheduler`: fixed-delay trigger for the relay.
 - `OrderSubmittedEvent`: explicit event payload.
 - `OrderSubmittedEventConsumer`: JMS listener that restores correlation ID and delegates processing.
 - Queue name: `order.submitted`.
@@ -168,30 +180,32 @@ Event fields:
 
 Reliability choices:
 
-- Events are published after the database commit.
+- Events are persisted in `outbox_events` in the same transaction as the order and idempotency record.
+- JMS publication is retried by the relay instead of happening directly in the REST request.
+- Relay failures are visible in `attempt_count`, `last_error`, `next_attempt_at`, and `status`.
 - Listener sessions are transacted.
 - Duplicate delivery is handled with deterministic execution-report IDs and unique trade-to-report constraints.
-- Broker-backed Testcontainers coverage verifies a real REST-to-Artemis-to-database path.
+- Broker-backed Testcontainers coverage verifies a real REST-to-outbox-to-Artemis-to-database path.
 
 Known messaging tradeoff:
 
-The MVP does not implement a transactional outbox. If the process crashes or the broker is unavailable after the database commit but before/during JMS send, an accepted order may not be processed. The production fix is an outbox table plus relay, with retry and operational visibility.
+The outbox improves reliability, but it is still an at-least-once pattern. If the relay publishes to JMS and the process crashes before marking the row `PUBLISHED`, the event can be published again on retry. That is why the consumer remains idempotent.
 
 ## 10. Distributed Systems Tradeoffs
 
 Tradeoffs already visible in the code:
 
 - At-least-once messaging means duplicate deliveries are expected, so consumers must be idempotent.
-- After-commit direct publish prevents publishing rolled-back work but cannot guarantee publication after commit.
+- Transactional outbox prevents losing the intent to publish when the database commit succeeds but the broker is temporarily unavailable.
+- The relay can still duplicate messages during crash recovery, so idempotent consumers are required.
 - Database constraints are used as the final line of defense for invariants.
 - Correlation IDs are propagated through REST and JMS for traceability.
-- The service chooses simplicity over a full saga/outbox/inbox architecture for MVP explainability.
+- The service chooses a simple polling outbox over a full CDC platform for MVP explainability.
 - Pessimistic locking is simple and correct for duplicate processing, but it may limit throughput.
 - PostgreSQL is a single source of truth, which simplifies consistency but means database health dominates system availability.
 
 How to improve for production:
 
-- Add a transactional outbox for order-submitted events.
 - Add a processed-message inbox table for explicit consumer idempotency and retry diagnostics.
 - Add DLQ dashboards and poison-message handling runbooks.
 - Add authentication/authorization and account/instrument reference data.
@@ -213,6 +227,8 @@ The test suite is layered:
 - Persistence tests:
   - `CorePersistenceIntegrationTest` with PostgreSQL Testcontainers.
 - Messaging tests:
+  - `OutboxEventWriterTest`
+  - `OutboxRelayServiceIntegrationTest`
   - `JmsOrderEventPublisherTest`
   - `OrderSubmittedEventConsumerIntegrationTest`
   - `OrderJmsEndToEndIntegrationTest` with Artemis and PostgreSQL Testcontainers.
@@ -227,7 +243,7 @@ Testing strengths:
 - Pure domain behavior is tested without Spring.
 - Database constraints are tested against real PostgreSQL, not H2.
 - Idempotency and duplicate message behavior are covered.
-- Broker-backed E2E coverage proves the actual JMS path.
+- Broker-backed E2E coverage proves the actual outbox-to-JMS path.
 - CI runs `./mvnw -B clean verify`.
 
 Testing gaps to discuss honestly:
@@ -291,7 +307,7 @@ Autoscaling:
 
 Concise AWS answer:
 
-I would containerize the service and run it on ECS Fargate behind an ALB, use RDS PostgreSQL as the source of truth, and use Amazon MQ if I want JMS compatibility. I would put credentials in Secrets Manager, encrypt data with KMS, use IAM task roles, and send structured logs and Micrometer metrics to CloudWatch. Before production, I would add an outbox and processed-message inbox so broker failures and retries are operationally reliable.
+I would containerize the service and run it on ECS Fargate behind an ALB, use RDS PostgreSQL as the source of truth, and use Amazon MQ if I want JMS compatibility. I would put credentials in Secrets Manager, encrypt data with KMS, use IAM task roles, and send structured logs and Micrometer metrics to CloudWatch. The transactional outbox gives producer-side retry visibility; before production I would add a processed-message inbox and DLQ dashboards for consumer-side operations.
 
 ## 14. FIX And Trade Lifecycle Discussion
 
@@ -328,8 +344,7 @@ This is not a FIX engine. It does not implement sessions, sequence numbers, rese
 
 Known limitations:
 
-- No transactional outbox; event publication can be lost after DB commit if the process or broker fails.
-- No explicit processed-message inbox table for consumer idempotency diagnostics.
+- No explicit processed-message inbox table for queryable consumer idempotency and retry diagnostics.
 - Account and instrument are modeled as identifiers, not persisted reference data with active/suspended status.
 - No authentication or authorization.
 - No order cancellation API.
@@ -342,8 +357,8 @@ Known limitations:
 
 Improvements:
 
-- Add outbox and relay with retry state and dead-letter handling.
 - Add processed-message inbox table with message ID, status, attempt count, and timestamps.
+- Add DLQ dashboards and poison-message runbooks around broker redelivery.
 - Add account/instrument tables and validation.
 - Add cancel/replace workflows.
 - Add paginated search endpoints with composite indexes.
@@ -368,7 +383,7 @@ The consumer expects at-least-once delivery. `OrderExecutionProcessor` derives a
 
 ### 4. Where are your transaction boundaries, and what is the main reliability gap?
 
-Order submission is one database transaction for the order and idempotency record. JMS publication is registered with `afterCommit`, so the service does not publish an event for a rolled-back order. Message consumption is another transaction that writes the execution report, trade, and order status update together. The main reliability gap is direct after-commit publishing: a crash or broker outage after DB commit can leave an accepted order without an event. The production fix is a transactional outbox table and relay process.
+Order submission is one database transaction for the order, idempotency record, and outbox event. The REST path does not publish directly to JMS. A relay transaction locks due pending outbox rows, publishes them to JMS, and marks them `PUBLISHED` or records retry state. Message consumption is another transaction that writes the execution report, trade, and order status update together. The remaining reliability gap is the classic at-least-once outbox case: if the relay publishes and crashes before marking the row `PUBLISHED`, it may publish the same event again, so the consumer must stay idempotent.
 
 ### 5. How would you investigate high p99 latency in this service?
 

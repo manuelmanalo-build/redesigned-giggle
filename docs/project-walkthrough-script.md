@@ -4,7 +4,7 @@
 
 This project is a Java 21 Spring Boot backend that simulates a simplified real-time trade processing platform.
 
-The core flow is: a client submits an order over REST, the API validates it, stores it in PostgreSQL, records idempotency state, and publishes an `OrderSubmittedEvent` to a JMS queue after the database transaction commits. A separate asynchronous consumer receives that event, simulates execution, creates an execution report, creates a trade when the order fills, and updates the order status.
+The core flow is: a client submits an order over REST, the API validates it, stores it in PostgreSQL, records idempotency state, and writes an `OrderSubmittedEvent` to a transactional outbox in the same database transaction. A relay publishes pending outbox events to a JMS queue. A separate asynchronous consumer receives that event, simulates execution, creates an execution report, creates a trade when the order fills, and updates the order status.
 
 I built it to demonstrate the backend topics that usually come up in senior Java interviews: domain modeling, REST design, SQL constraints and indexes, transaction boundaries, JMS messaging, duplicate-message safety, concurrency, observability, Testcontainers integration tests, CI, and cloud deployment tradeoffs.
 
@@ -16,13 +16,13 @@ At a high level, this is a modular Spring Boot service with clear package bounda
 
 The `api` package owns the REST layer. `OrderController` exposes `POST /api/v1/orders`, `GET /api/v1/orders/{orderId}`, `GET /api/v1/orders/{orderId}/execution-reports`, and `GET /api/v1/orders/{orderId}/trades`. The controller stays thin. It validates request shape and delegates to the application layer.
 
-The `application` package owns orchestration. `OrderApplicationService` handles order submission, idempotency, database writes, and after-commit event publication. `OrderExecutionProcessor` handles the asynchronous execution workflow after a JMS message arrives. `ExecutionSimulator` is an abstraction for the market/limit fill logic.
+The `application` package owns orchestration. `OrderApplicationService` handles order submission, idempotency, database writes, and outbox event creation. `OrderExecutionProcessor` handles the asynchronous execution workflow after a JMS message arrives. `ExecutionSimulator` is an abstraction for the market/limit fill logic.
 
 The `domain` package contains the pure Java model. That includes `Order`, `Quantity`, `Price`, `ExecutionReport`, `Trade`, IDs, and enums like `OrderStatus`, `OrderType`, and `ExecutionType`. I kept database annotations out of the pure domain model so the business rules are testable without Spring or JPA.
 
 The `persistence` package contains JPA entities and repositories. PostgreSQL is the source of truth, and Flyway migrations define the schema. The schema has database constraints for important invariants, like positive quantities, valid enum values, market versus limit price rules, and one trade per execution report.
 
-The `messaging` package contains the JMS pieces. There is an `OrderEventPublisher` abstraction, a `JmsOrderEventPublisher` implementation, the `OrderSubmittedEvent` payload, and an `OrderSubmittedEventConsumer`. The API/application layer does not talk directly to `JmsTemplate`.
+The `messaging` package contains the outbox relay and JMS pieces. There is an `OutboxRelayService`, an `OrderEventPublisher` abstraction, a `JmsOrderEventPublisher` implementation, the `OrderSubmittedEvent` payload, and an `OrderSubmittedEventConsumer`. The API/application layer does not talk directly to `JmsTemplate`.
 
 The `observability` package handles correlation IDs and Micrometer metrics. REST requests get an `X-Correlation-Id`, and that same value is carried into JMS events so API and async processing can be tied together in logs.
 
@@ -46,11 +46,11 @@ If the claim fails, the service loads the existing idempotency record. If the re
 
 If the claim succeeds, the service creates an `Order` domain object, transitions it from `NEW` to `ACCEPTED`, saves it as an `OrderEntity`, and completes the idempotency record with the created order ID and response status.
 
-That order insert and idempotency update happen in the same Spring transaction. That means the accepted order and the replay state become durable together.
+That order insert and idempotency update happen in the same Spring transaction as the outbox insert. That means the accepted order, replay state, and intent to publish the integration event become durable together.
 
-After the order is saved, the service registers an after-commit callback using Spring transaction synchronization. That callback publishes `OrderSubmittedEvent` only after the database transaction commits. I did that to avoid publishing events for orders that later roll back.
+After the transaction commits, the REST path is done. It does not publish directly to JMS. A scheduled outbox relay polls pending outbox rows, publishes the event payload to `order.submitted`, and marks the row `PUBLISHED`.
 
-The tradeoff is that this is not a transactional outbox. If the database commit succeeds but the process crashes before the JMS send, or the broker is down at that moment, the order could be accepted but not processed. For an MVP, this is explainable and tested. For production, I would add an outbox table and relay.
+The tradeoff is that this is still at-least-once messaging. If the relay publishes to JMS but crashes before marking the outbox row published, it may publish that event again on retry. That is why the consumer is idempotent.
 
 The response currently returns `201 Created` with the accepted order state. Later, if I wanted the API to be more explicitly asynchronous, I could return `202 Accepted`, but because the order itself is durably created synchronously, `201` is reasonable here.
 
@@ -181,9 +181,9 @@ The main point I would make is that the tests prove behavior against real depend
 
 The next thing I would improve is messaging reliability.
 
-Right now, order submission writes the order and idempotency record in one transaction, then publishes to JMS after commit. That avoids publishing rolled-back work, but it still has a gap: if the app crashes after the commit and before the JMS publish succeeds, the order may remain accepted but never be processed.
+The next thing I would improve is consumer-side operational visibility.
 
-So my first production hardening step would be a transactional outbox. The order transaction would insert an outbox row. A separate relay would publish those events to the broker, mark them published, and retry failures. That gives durability and operational visibility.
+The project now uses a transactional outbox. Order submission writes the order, idempotency record, and outbox event in one transaction. A separate relay publishes those events to the broker, marks them published, and retries failures. That gives durability and operational visibility for producer-side messaging.
 
 The second improvement would be a processed-message inbox table. The current deterministic execution report ID makes duplicate delivery safe, but an inbox table would explicitly track message IDs, attempts, status, errors, and timestamps. That is better for retries, DLQs, and support.
 

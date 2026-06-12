@@ -20,8 +20,6 @@ public class JmsOrderEventPublisher implements OrderEventPublisher {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JmsOrderEventPublisher.class);
 
-    public static final String EVENT_TYPE = "OrderSubmittedEvent";
-
     private final JmsTemplate jmsTemplate;
     private final ObjectMapper objectMapper;
     private final String destinationName;
@@ -41,7 +39,7 @@ public class JmsOrderEventPublisher implements OrderEventPublisher {
         String payload = serialize(event);
         jmsTemplate.send(destinationName, session -> {
             TextMessage message = session.createTextMessage(payload);
-            message.setStringProperty("eventType", EVENT_TYPE);
+            message.setStringProperty("eventType", OrderSubmittedEvent.EVENT_TYPE);
             message.setStringProperty("eventId", event.eventId());
             message.setStringProperty("orderId", event.orderId());
             message.setStringProperty("correlationId", event.correlationId());

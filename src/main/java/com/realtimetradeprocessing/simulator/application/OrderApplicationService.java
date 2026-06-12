@@ -16,8 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.realtimetradeprocessing.simulator.api.ExecutionReportResponse;
 import com.realtimetradeprocessing.simulator.api.IdempotencyConflictException;
@@ -33,7 +31,6 @@ import com.realtimetradeprocessing.simulator.domain.OrderId;
 import com.realtimetradeprocessing.simulator.domain.OrderType;
 import com.realtimetradeprocessing.simulator.domain.Price;
 import com.realtimetradeprocessing.simulator.domain.Quantity;
-import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
 import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
 import com.realtimetradeprocessing.simulator.persistence.entity.IdempotencyRecordEntity;
@@ -53,7 +50,7 @@ public class OrderApplicationService {
     private final ExecutionReportJpaRepository executionReportRepository;
     private final TradeJpaRepository tradeRepository;
     private final IdempotencyRecordJpaRepository idempotencyRecordRepository;
-    private final OrderEventPublisher orderEventPublisher;
+    private final OutboxEventWriter outboxEventWriter;
     private final TradeMetrics tradeMetrics;
     private final Clock clock;
 
@@ -63,7 +60,7 @@ public class OrderApplicationService {
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
-        OrderEventPublisher orderEventPublisher,
+        OutboxEventWriter outboxEventWriter,
         TradeMetrics tradeMetrics
     ) {
         this(
@@ -71,7 +68,7 @@ public class OrderApplicationService {
             executionReportRepository,
             tradeRepository,
             idempotencyRecordRepository,
-            orderEventPublisher,
+            outboxEventWriter,
             tradeMetrics,
             Clock.systemUTC()
         );
@@ -82,7 +79,7 @@ public class OrderApplicationService {
         ExecutionReportJpaRepository executionReportRepository,
         TradeJpaRepository tradeRepository,
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
-        OrderEventPublisher orderEventPublisher,
+        OutboxEventWriter outboxEventWriter,
         TradeMetrics tradeMetrics,
         Clock clock
     ) {
@@ -90,7 +87,7 @@ public class OrderApplicationService {
         this.executionReportRepository = executionReportRepository;
         this.tradeRepository = tradeRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
-        this.orderEventPublisher = orderEventPublisher;
+        this.outboxEventWriter = outboxEventWriter;
         this.tradeMetrics = tradeMetrics;
         this.clock = clock;
     }
@@ -172,22 +169,8 @@ public class OrderApplicationService {
             savedOrder.getSide(),
             savedOrder.getType()
         );
-        publishAfterCommit(toOrderSubmittedEvent(savedOrder, correlationId, now));
+        outboxEventWriter.writeOrderSubmitted(toOrderSubmittedEvent(savedOrder, correlationId, now), now);
         return new OrderSubmissionResult(CREATED, OrderResponse.fromEntity(savedOrder));
-    }
-
-    private void publishAfterCommit(OrderSubmittedEvent event) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            orderEventPublisher.publishOrderSubmitted(event);
-            return;
-        }
-
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                orderEventPublisher.publishOrderSubmitted(event);
-            }
-        });
     }
 
     private OrderSubmittedEvent toOrderSubmittedEvent(OrderEntity order, String correlationId, Instant createdAt) {

@@ -106,7 +106,7 @@ Tradeoffs:
 
 - More broker-specific operational tuning than SQS.
 - Throughput and scaling characteristics differ from cloud-native queue services.
-- Direct after-commit publishing still has the same reliability gap unless an outbox is added.
+- The current outbox relay reduces publish-loss risk, but Amazon MQ still needs alarms for connection failures, queue depth, and redelivery/DLQ behavior.
 
 Use this when the interview story emphasizes JMS compatibility or enterprise messaging migration.
 
@@ -275,7 +275,7 @@ Expected failure modes:
 
 - RDS unavailable: REST writes fail, consumers cannot persist reports/trades, health checks should degrade.
 - RDS connection pool exhausted: request latency rises and consumers block on JDBC.
-- Broker unavailable during after-commit publish: accepted orders may not be processed because the MVP lacks an outbox.
+- Broker unavailable during outbox relay: accepted orders remain in `outbox_events` with retry state until the broker recovers or max attempts are reached.
 - Broker unavailable during consumption: messages wait in the queue until consumers recover.
 - Consumer failure after message receipt: transacted JMS session should roll back acknowledgement and allow redelivery.
 - Duplicate message delivery: deterministic processing and database constraints should prevent duplicate terminal effects.
@@ -289,7 +289,6 @@ Expected failure modes:
 
 The current MVP would need these before real production deployment:
 
-- Transactional outbox for reliable event publication after database commit.
 - Explicit processed-message inbox table for queryable consumer idempotency and retry diagnostics.
 - Backward-compatible migration policy.
 - Load testing against realistic queue depth and database size.

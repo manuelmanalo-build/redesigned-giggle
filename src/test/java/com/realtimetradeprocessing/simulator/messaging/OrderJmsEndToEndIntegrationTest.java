@@ -35,6 +35,7 @@ import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepo
 
 @SpringBootTest(properties = {
     "trade.execution.simulated-market-price=100.00",
+    "trade.outbox.relay-interval-ms=100",
     "spring.jms.listener.concurrency=1",
     "spring.jms.listener.max-concurrency=1"
 })

@@ -35,7 +35,7 @@ This document defines the REST API contract for the current MVP implementation a
 
 `POST /api/v1/orders`
 
-Validates, persists, and accepts an order. After the database transaction commits, the service publishes `OrderSubmittedEvent` to the `order.submitted` JMS queue. The asynchronous consumer may later update the order to `FILLED`, create an execution report, and create a trade; non-marketable limit orders remain `ACCEPTED` with a no-fill execution report.
+Validates, persists, and accepts an order. The same database transaction stores the order, idempotency result, and a pending transactional outbox event. A separate outbox relay later publishes `OrderSubmittedEvent` to the `order.submitted` JMS queue. The asynchronous consumer may then update the order to `FILLED`, create an execution report, and create a trade; non-marketable limit orders remain `ACCEPTED` with a no-fill execution report.
 
 Required header:
 

@@ -3,7 +3,6 @@ package com.realtimetradeprocessing.simulator.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -21,7 +20,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -48,16 +46,18 @@ import com.realtimetradeprocessing.simulator.domain.TradeId;
 import com.realtimetradeprocessing.simulator.domain.AccountId;
 import com.realtimetradeprocessing.simulator.domain.InstrumentSymbol;
 import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
-import com.realtimetradeprocessing.simulator.messaging.OrderSubmittedEvent;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
+import com.realtimetradeprocessing.simulator.persistence.entity.OutboxEventStatus;
 import com.realtimetradeprocessing.simulator.persistence.entity.TradeEntity;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 
 @SpringBootTest(properties = {
     "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jms.artemis.ArtemisAutoConfiguration",
     "trade.messaging.jms-publisher-enabled=false",
-    "trade.messaging.jms-listener-enabled=false"
+    "trade.messaging.jms-listener-enabled=false",
+    "trade.outbox.scheduling-enabled=false"
 })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -90,6 +90,9 @@ class OrderApiIntegrationTest {
     @Autowired
     private TradeJpaRepository tradeRepository;
 
+    @Autowired
+    private OutboxEventJpaRepository outboxEventRepository;
+
     @MockBean
     private OrderEventPublisher orderEventPublisher;
 
@@ -114,13 +117,8 @@ class OrderApiIntegrationTest {
         String orderId = body.get("orderId").asText();
         assertThat(orderId).isNotBlank();
 
-        ArgumentCaptor<OrderSubmittedEvent> eventCaptor = ArgumentCaptor.forClass(OrderSubmittedEvent.class);
-        verify(orderEventPublisher).publishOrderSubmitted(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().orderId()).isEqualTo(orderId);
-        assertThat(eventCaptor.getValue().clientOrderId()).isEqualTo("CLIENT-123");
-        assertThat(eventCaptor.getValue().accountId()).isEqualTo("ACC-001");
-        assertThat(eventCaptor.getValue().symbol()).isEqualTo("AAPL");
-        assertThat(eventCaptor.getValue().correlationId()).isEqualTo("corr-idem-api-submit");
+        verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+        assertOutboxEventCreated(orderId, "corr-idem-api-submit");
 
         mockMvc.perform(get("/api/v1/orders/{orderId}", orderId))
             .andExpect(status().isOk())
@@ -146,7 +144,8 @@ class OrderApiIntegrationTest {
 
         assertThat(second.get("orderId").asText()).isEqualTo(first.get("orderId").asText());
         assertThat(second.get("clientOrderId").asText()).isEqualTo("CLIENT-123");
-        verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+        assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(first.get("orderId").asText())).hasSize(1);
+        verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -175,7 +174,8 @@ class OrderApiIntegrationTest {
             );
 
             assertThat(responses.get(1).get("orderId").asText()).isEqualTo(responses.get(0).get("orderId").asText());
-            verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+            assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(responses.get(0).get("orderId").asText())).hasSize(1);
+            verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
         } finally {
             executor.shutdownNow();
         }
@@ -202,12 +202,13 @@ class OrderApiIntegrationTest {
             .andExpect(status().isConflict())
             .andExpect(jsonPath("$.errorCode").value("IDEMPOTENCY_CONFLICT"));
 
-        verify(orderEventPublisher, times(1)).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
+        verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void doesNotPublishEventForInvalidOrderRequest() throws Exception {
         clearInvocations(orderEventPublisher);
+        long outboxCount = outboxEventRepository.count();
 
         submitOrder("idem-api-invalid", """
                 {
@@ -222,18 +223,21 @@ class OrderApiIntegrationTest {
                 """)
             .andExpect(status().isBadRequest());
 
+        assertThat(outboxEventRepository.count()).isEqualTo(outboxCount);
         verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void rejectsOverlongIdempotencyKeyBeforePersistence() throws Exception {
         clearInvocations(orderEventPublisher);
+        long outboxCount = outboxEventRepository.count();
         String overlongKey = "x".repeat(129);
 
         submitOrder(overlongKey, validLimitOrderJson())
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
 
+        assertThat(outboxEventRepository.count()).isEqualTo(outboxCount);
         verify(orderEventPublisher, never()).publishOrderSubmitted(org.mockito.ArgumentMatchers.any());
     }
 
@@ -315,5 +319,17 @@ class OrderApiIntegrationTest {
               "limitPrice": 185.50
             }
             """;
+    }
+
+    private void assertOutboxEventCreated(String orderId, String correlationId) {
+        assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(orderId))
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.getAggregateType()).isEqualTo("ORDER");
+                assertThat(event.getEventType()).isEqualTo("OrderSubmittedEvent");
+                assertThat(event.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+                assertThat(event.getCorrelationId()).isEqualTo(correlationId);
+                assertThat(event.getPayload()).contains("\"orderId\":\"" + orderId + "\"");
+            });
     }
 }

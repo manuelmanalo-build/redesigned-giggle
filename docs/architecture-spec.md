@@ -12,7 +12,8 @@ This document describes the current MVP design and planned extensions.
 - Application service layer: command orchestration, idempotency, transactions, and messaging coordination.
 - Domain layer: order validation, state transitions, execution decisions, and trade creation rules.
 - Persistence layer: JPA entities, repositories, SQL constraints, and indexes.
-- Messaging producer: publishes `ORDER_SUBMITTED` events.
+- Outbox writer and relay: persists integration events atomically with order changes, then publishes pending events to JMS.
+- Messaging producer: publishes outbox-backed `ORDER_SUBMITTED` events.
 - Messaging consumer: receives order events, simulates execution, writes execution reports and trades, and updates order state.
 - Observability layer: correlation ID filter/interceptor and structured logging.
 - Configuration layer: Spring profiles, database, JMS, listener concurrency, and retry settings.
@@ -39,18 +40,20 @@ The exact package names may evolve, but framework concerns should not leak into 
 3. API validation checks JSON shape and simple constraints.
 4. `OrderApplicationService` validates domain rules.
 5. The service validates domain rules and claims an `IdempotencyRecord` with a PostgreSQL `ON CONFLICT DO NOTHING` insert.
-6. Within a database transaction, the service stores the order and records the intended response.
-7. The service registers an after-commit publication of `OrderSubmittedEvent`.
-8. After the database transaction commits, `OrderEventPublisher` sends the event to the `order.submitted` JMS queue.
-9. The API returns `201 Created`.
-10. `OrderSubmittedEventConsumer` receives the message.
-11. The consumer checks message-consumption idempotency.
-12. The consumer loads and locks or conditionally updates the order.
-13. The execution simulator returns an execution outcome.
-14. The consumer writes an `ExecutionReport`.
-15. The consumer writes a `Trade` when quantity is filled.
-16. The consumer updates `OrderStatus`.
-17. Query APIs read current state and history from PostgreSQL.
+6. Within one database transaction, the service stores the order, records the intended response, and inserts an `outbox_events` row containing `OrderSubmittedEvent`.
+7. The API returns `201 Created` after the transaction commits. It does not publish directly to JMS.
+8. `OutboxRelayScheduler` periodically calls `OutboxRelayService`.
+9. The relay locks due `PENDING` outbox rows with `FOR UPDATE SKIP LOCKED`.
+10. The relay publishes the event payload to the `order.submitted` JMS queue through `OrderEventPublisher`.
+11. The relay marks the outbox row `PUBLISHED`, or records retry state on failure.
+12. `OrderSubmittedEventConsumer` receives the message.
+13. The consumer checks message-consumption idempotency.
+14. The consumer loads and locks or conditionally updates the order.
+15. The execution simulator returns an execution outcome.
+16. The consumer writes an `ExecutionReport`.
+17. The consumer writes a `Trade` when quantity is filled.
+18. The consumer updates `OrderStatus`.
+19. Query APIs read current state and history from PostgreSQL.
 
 ## Transaction Boundaries
 
@@ -61,22 +64,25 @@ The submission transaction should:
 - Create or validate the `IdempotencyRecord`.
 - Insert the `Order`.
 - Persist the response body or enough data to rebuild the response for duplicates.
+- Insert a `PENDING` `outbox_events` row for accepted orders.
 - Commit before the system exposes the order as accepted.
 
 Current MVP behavior:
 
 - A valid order is persisted as `ACCEPTED`.
-- The order and idempotency record are committed in one database transaction.
+- The order, idempotency record, and outbox event are committed in one database transaction.
 - REST submission idempotency uses a database-backed claim: the first request inserts the idempotency key, and concurrent requests with the same key wait on PostgreSQL uniqueness before replaying or conflicting.
-- `OrderSubmittedEvent` publication is registered with Spring transaction synchronization and runs after commit.
-- The application service depends on `OrderEventPublisher`, not `JmsTemplate`, so messaging can be tested and replaced independently.
+- The REST transaction does not call JMS.
+- `OutboxEventWriter` serializes the integration event and stores it in the database.
+- `OutboxRelayService` later publishes due outbox rows through `OrderEventPublisher`, not `JmsTemplate` directly, so messaging remains testable and replaceable.
 
 Tradeoff:
 
-- The MVP does not use a transactional outbox.
-- Publishing after commit avoids emitting events for rolled-back database work.
-- A process crash or broker outage after the database commit but before/during JMS send can leave an accepted order without a published event.
-- A production-grade design should add an outbox table and relay process so database state and event publication can be retried reliably.
+- The outbox closes the gap where a database commit succeeds but immediate JMS publication fails.
+- The relay is intentionally simple: it polls the database instead of using CDC, Kafka, or Debezium.
+- A process crash after JMS send but before marking the row `PUBLISHED` can still cause a duplicate publish on retry.
+- Consumers therefore remain idempotent and must treat duplicate message delivery as normal distributed-system behavior.
+- Relay failures are observable in `outbox_events.attempt_count`, `last_error`, `next_attempt_at`, and `status`.
 
 ### Message Consumption Transaction
 
@@ -142,6 +148,7 @@ Current MVP tables:
 - `execution_reports`
 - `trades`
 - `idempotency_records`
+- `outbox_events`
 
 Planned later tables:
 
@@ -159,6 +166,8 @@ Current constraints:
 - Fill execution reports must include executed quantity and execution price; non-fill reports must not.
 - `idempotency_records.idempotency_key` is the primary key.
 - `idempotency_records.response_status` must be a valid HTTP status code range.
+- `outbox_events.status` is constrained to `PENDING`, `PUBLISHED`, or `FAILED`.
+- `outbox_events.attempt_count` must be non-negative.
 - Foreign keys from execution reports, trades, and idempotency records protect references to orders.
 - Each trade references the execution report that created it, and `trades.execution_report_id` is unique so duplicate fill reports cannot create duplicate trades for the same report.
 
@@ -172,6 +181,8 @@ Current indexes:
 - `trades(order_id)`
 - `trades(execution_report_id)`
 - `idempotency_records(idempotency_key)`
+- `outbox_events(status, next_attempt_at, created_at)`
+- `outbox_events(aggregate_type, aggregate_id)`
 
 Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once list endpoints exist.
 
@@ -201,19 +212,33 @@ Payload fields:
 
 Serialization:
 
+- `OutboxEventWriter` serializes `OrderSubmittedEvent` into `outbox_events.payload`.
 - `JmsOrderEventPublisher` serializes the event explicitly to a JSON text message with Jackson.
 - JMS message properties include `eventType`, `eventId`, `orderId`, and `correlationId`.
 - `JMSCorrelationID` is set from the request correlation ID.
 
+Outbox relay:
+
+- `OutboxRelayScheduler` runs on a configurable fixed delay.
+- `OutboxRelayService` fetches due `PENDING` rows in configurable batches.
+- PostgreSQL `FOR UPDATE SKIP LOCKED` avoids multiple relay transactions working the same row in normal operation.
+- Successful publication marks a row `PUBLISHED` and sets `published_at`.
+- Failed publication increments `attempt_count`, stores `last_error`, and sets `next_attempt_at` using simple backoff.
+- Rows are marked `FAILED` after the configured max attempts.
+
 Current tests:
 
 - The JMS publisher is unit-tested with a mocked `JmsTemplate`.
-- REST integration tests mock `OrderEventPublisher` to verify accepted orders publish an event and invalid/conflicting submissions do not create duplicate publications.
+- Outbox writer behavior is unit-tested.
+- REST integration tests verify accepted orders create one pending outbox row and invalid/conflicting submissions do not create publishable outbox rows.
+- Relay integration tests verify pending event publication, `PUBLISHED` marking, failure retry metadata, max-attempt `FAILED` behavior, and skipping already-published rows.
 - Consumer integration tests currently invoke the consumer directly against PostgreSQL to verify market fills, limit fills, limit no-fills, duplicate delivery, and missing-order safety.
-- A broker-backed Artemis Testcontainers integration test verifies that REST submission publishes a real JMS message and the asynchronous listener consumes it into an execution report, trade, and filled order state.
+- A broker-backed Artemis Testcontainers integration test verifies that REST submission writes the outbox, the relay publishes a real JMS message, and the asynchronous listener consumes it into an execution report, trade, and filled order state.
 
 Retry and DLQ behavior:
 
+- The relay retries publish failures using database-visible retry state.
+- Failed relay attempts are visible in `outbox_events`.
 - The consumer must throw on retryable failures so the broker can redeliver.
 - JMS listener sessions are transacted in the MVP so a processing exception rolls back message acknowledgement and allows broker redelivery.
 - Poison-message behavior should be DLQ-ready even if the first version only documents broker defaults.

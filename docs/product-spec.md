@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`realtime-trade-processing-simulator` models a simplified real-time order processing platform. A client submits an order through REST, the API validates and stores it, publishes an `order-submitted` event to JMS, an asynchronous consumer simulates execution, and the system records execution reports, trades, and final order state.
+`realtime-trade-processing-simulator` models a simplified real-time order processing platform. A client submits an order through REST, the API validates and stores it with a transactional outbox event, a relay publishes the order-submitted event to JMS, an asynchronous consumer simulates execution, and the system records execution reports, trades, and final order state.
 
 The product is for interview preparation. It should be realistic enough to discuss backend engineering tradeoffs while remaining small enough to implement, test, and explain clearly.
 
@@ -11,8 +11,9 @@ The product is for interview preparation. It should be realistic enough to discu
 The MVP includes one Spring Boot service with:
 
 - REST APIs for order submission and read models.
-- PostgreSQL persistence for orders, execution reports, trades, and idempotency records. Account and instrument are represented as explicit order/trade fields in the MVP; dedicated reference-data tables are planned extensions.
+- PostgreSQL persistence for orders, execution reports, trades, idempotency records, and transactional outbox events. Account and instrument are represented as explicit order/trade fields in the MVP; dedicated reference-data tables are planned extensions.
 - JMS publishing and consuming with ActiveMQ Artemis.
+- Transactional outbox relay for reliable order-submitted event publication and database-visible retry state.
 - Idempotent order submission using an `Idempotency-Key` header.
 - Idempotent message consumption using event IDs and deterministic execution-report/trade IDs.
 - A deterministic execution simulator that creates execution reports.
@@ -40,15 +41,16 @@ The MVP includes one Spring Boot service with:
 2. API validates request shape and domain rules.
 3. API creates or reuses an idempotency record for the request.
 4. API stores the order with status `ACCEPTED`.
-5. API publishes an `ORDER_SUBMITTED` event to a JMS queue.
+5. API writes a pending `ORDER_SUBMITTED` outbox event in the same database transaction as the order and idempotency record.
 6. API returns `201 Created` with order identity and current state.
-7. Async consumer receives the event.
-8. Consumer verifies the message has not already been processed.
-9. Consumer simulates execution.
-10. System creates an execution report.
-11. System creates a trade record for filled executions.
-12. System updates order status.
-13. Client retrieves order, execution report, and trade state via REST.
+7. Outbox relay polls due pending events, publishes to the JMS queue, and marks successful rows as `PUBLISHED`.
+8. Async consumer receives the event.
+9. Consumer verifies the message has not already been processed.
+10. Consumer simulates execution.
+11. System creates an execution report.
+12. System creates a trade record for filled executions.
+13. System updates order status.
+14. Client retrieves order, execution report, and trade state via REST.
 
 ## Domain Concepts
 
@@ -63,7 +65,9 @@ The MVP domain includes:
 - `ExecutionReport`: result of simulated processing.
 - `ExecutionType`: execution event type.
 - `Trade`: fill record derived from an execution.
-- `IdempotencyRecord`: record used to deduplicate REST submissions. A dedicated message inbox table is a planned extension.
+- `IdempotencyRecord`: record used to deduplicate REST submissions.
+- `OutboxEvent`: durable integration event record used by the relay to publish accepted orders to JMS.
+- A dedicated message inbox table is a planned extension for richer consumer diagnostics.
 
 ## Functional Requirements
 
