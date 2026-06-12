@@ -78,7 +78,7 @@ If there is a fill, the processor creates an `ExecutionReport`, creates a `Trade
 
 JMS listener sessions are configured as transacted, so if processing throws an exception, message acknowledgement can roll back and the broker can redeliver. The code also has duplicate protection because at-least-once delivery is the normal expectation with messaging.
 
-The big reliability improvement I would add next is a real processed-message inbox table. The deterministic execution report ID works for this MVP, but an inbox table would make retries, attempts, failure reasons, and DLQ diagnostics much more visible operationally.
+The consumer now uses a processed-message inbox table. It claims the event ID before doing business work, marks successful messages `PROCESSED`, marks duplicate observations `DUPLICATE`, and stores failure diagnostics like attempt count and last error when processing throws. The deterministic execution report ID still remains as a business-level safety net.
 
 ## 5. 3-Minute Explanation Of Idempotency
 
@@ -179,13 +179,11 @@ The main point I would make is that the tests prove behavior against real depend
 
 ## 10. Strong Closing Answer: What I Would Improve Next
 
-The next thing I would improve is messaging reliability.
-
 The next thing I would improve is consumer-side operational visibility.
 
 The project now uses a transactional outbox. Order submission writes the order, idempotency record, and outbox event in one transaction. A separate relay publishes those events to the broker, marks them published, and retries failures. That gives durability and operational visibility for producer-side messaging.
 
-The second improvement would be a processed-message inbox table. The current deterministic execution report ID makes duplicate delivery safe, but an inbox table would explicitly track message IDs, attempts, status, errors, and timestamps. That is better for retries, DLQs, and support.
+The project also uses a processed-message inbox. That makes duplicate observations and failed attempts queryable. The next production step would be broker-level DLQ integration: either a DLQ listener or an operational reconciliation job that marks poisoned messages `DEAD_LETTERED` and links them to broker diagnostics.
 
 After that, I would add real account and instrument tables, authentication and authorization, cancel/replace workflows, paginated search endpoints, partial-fill simulation, and load tests around queue depth, database locks, connection pool sizing, and p99 latency.
 

@@ -4,7 +4,7 @@ An interview-prep Java 21 backend project that simulates a simplified real-time 
 
 The system accepts orders through REST, validates and persists them, writes order-submitted events to a transactional outbox, relays those events to JMS, processes them asynchronously, simulates executions, creates execution reports and trades, updates order state, and exposes query APIs.
 
-The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, transactional outbox publication, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
+The repository currently contains a working Spring Boot service with a pure domain model, Flyway-managed PostgreSQL persistence mappings, REST order submission/retrieval APIs, idempotency handling, transactional outbox publication, processed-message inbox diagnostics, asynchronous order-submitted consumption, deterministic execution simulation, and container-backed integration tests.
 
 ## Project Summary
 
@@ -17,6 +17,7 @@ The MVP models:
 - SQL-backed order persistence.
 - Transactional outbox storage and relay for reliable JMS publication.
 - JMS-backed asynchronous processing.
+- Processed-message inbox tracking for consumer idempotency and retry/DLQ diagnostics.
 - Deterministic execution simulation.
 - Execution report creation.
 - Trade creation for filled orders. Partial-fill states are modeled as a planned lifecycle extension.
@@ -78,7 +79,7 @@ This starts:
 - ActiveMQ Artemis JMS broker on `localhost:61616`.
 - Artemis web console on `http://localhost:8161`.
 - Accepted orders are first written to `outbox_events`; the relay publishes pending rows to the JMS queue `order.submitted`.
-- The local application consumes `order.submitted` by default and writes execution reports, trades, and order status updates.
+- The local application consumes `order.submitted` by default, tracks processing in `processed_messages`, and writes execution reports, trades, and order status updates.
 
 Default local credentials:
 
@@ -172,7 +173,7 @@ docker build --tag realtime-trade-processing-simulator:ci .
 
 ## Architecture
 
-The intended architecture is a single Spring Boot service with REST APIs, PostgreSQL persistence, a transactional outbox relay, JMS producer and consumer components, explicit transaction boundaries, and correlation-aware logging.
+The intended architecture is a single Spring Boot service with REST APIs, PostgreSQL persistence, a transactional outbox relay, a processed-message inbox, JMS producer and consumer components, explicit transaction boundaries, and correlation-aware logging.
 
 Current package roots:
 
@@ -210,7 +211,7 @@ Expected workflow:
 
 ## Testing
 
-The current test suite includes domain unit tests, execution simulator unit tests, controller validation tests, outbox writer/relay tests, publisher unit tests, application startup smoke tests, PostgreSQL Testcontainers integration tests, and an Artemis-backed end-to-end JMS flow test.
+The current test suite includes domain unit tests, execution simulator unit tests, controller validation tests, outbox writer/relay tests, processed-message inbox assertions, publisher unit tests, application startup smoke tests, PostgreSQL Testcontainers integration tests, and an Artemis-backed end-to-end JMS flow test.
 
 See [docs/testing-strategy.md](docs/testing-strategy.md).
 

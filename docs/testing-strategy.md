@@ -4,7 +4,7 @@
 
 The project should be built test-first where practical. Tests must prove the order submission, persistence, JMS processing, execution report, trade creation, idempotency, and error-handling behavior.
 
-The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, outbox writer tests, JMS publisher unit tests, PostgreSQL-backed persistence/API/consumer/relay integration tests, and an Artemis-backed end-to-end publish/consume test.
+The current test suite includes pure domain unit tests, execution simulator unit tests, Spring Boot startup smoke tests, REST controller tests, outbox writer tests, JMS publisher unit tests, PostgreSQL-backed persistence/API/consumer/relay/inbox integration tests, and an Artemis-backed end-to-end publish/consume test.
 
 ## Test Commands
 
@@ -44,7 +44,7 @@ Cover orchestration with mocked dependencies where useful:
 - Duplicate idempotency key with same fingerprint returns the same order resource and response status.
 - Duplicate idempotency key with different fingerprint fails with conflict.
 - Accepted order is stored with a pending outbox event in the same transaction.
-- Messaging failure behavior is captured through outbox relay retry metadata.
+- Messaging failure behavior is captured through outbox relay retry metadata and consumer-side `processed_messages` diagnostics.
 
 Tools:
 
@@ -80,9 +80,10 @@ Run against PostgreSQL Testcontainers:
 - Trade persistence verifies the required link from each trade to the execution report that created it.
 - Table constraints enforce unique idempotency keys.
 - Outbox table constraints enforce valid statuses and non-negative attempt counts.
+- Processed-message inbox constraints enforce valid statuses and non-negative attempt counts.
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
-- Pessimistic row locking and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
+- Processed-message inbox rows, pessimistic row locking, and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
 - Current repository query methods support order, execution-report, and trade lookup by ID/order ID. List filters and pagination are planned extensions.
 - Index-backed query paths are documented where relevant.
 
@@ -102,8 +103,9 @@ Run against embedded Artemis or an Artemis Testcontainer:
 - A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.
 - Current consumer integration tests invoke `OrderSubmittedEventConsumer` directly against PostgreSQL.
 - Consumer tests verify market-order fills, marketable limit fills, non-marketable limit no-fills, missing-order safety, and duplicate delivery idempotency.
+- Consumer tests verify new messages create `processed_messages` rows, successful processing marks rows `PROCESSED`, duplicate delivery marks rows `DUPLICATE` without duplicate reports/trades, and retryable failures mark rows `FAILED` with `last_error` and `attempt_count`.
 - Retryable failures trigger redelivery behavior.
-- Poison-message or DLQ-ready behavior is documented and covered where practical.
+- Poison-message or broker DLQ routing is documented as broker configuration; app-side diagnostics are covered through `processed_messages`.
 
 ### End-to-End Tests
 
@@ -145,7 +147,7 @@ CI should verify:
 The MVP should include focused concurrency tests rather than large load tests:
 
 - Concurrent submissions with the same idempotency key create one order.
-- Duplicate consumer attempts for the same message create one execution report and one trade.
+- Duplicate consumer attempts for the same message create one execution report, one trade, and a duplicate inbox observation.
 - Multiple consumer threads process different orders safely.
 
 Later performance work may add:

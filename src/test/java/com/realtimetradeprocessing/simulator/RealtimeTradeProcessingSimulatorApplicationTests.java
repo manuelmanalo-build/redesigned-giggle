@@ -8,6 +8,7 @@ import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionRep
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.ProcessedMessageJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
 
@@ -36,6 +37,9 @@ class RealtimeTradeProcessingSimulatorApplicationTests {
 
     @MockBean
     private OutboxEventJpaRepository outboxEventRepository;
+
+    @MockBean
+    private ProcessedMessageJpaRepository processedMessageRepository;
 
     @MockBean
     private OrderEventPublisher orderEventPublisher;

@@ -57,6 +57,8 @@ These standards guide implementation once code is added. They should keep the pr
 - Keep JMS-specific code outside domain logic and behind messaging abstractions.
 - Make consumers idempotent.
 - Treat duplicate delivery as normal, including the crash-recovery case where the relay publishes to JMS but crashes before marking the outbox row `PUBLISHED`.
+- Use `processed_messages` for consumer-side duplicate detection and retry diagnostics.
+- Preserve domain-level idempotency safeguards, such as deterministic execution-report/trade IDs, even when the inbox is present.
 - Throw on retryable failures so broker redelivery can occur.
 - Make DLQ behavior documented and configurable.
 - Version message payloads.
@@ -68,6 +70,7 @@ These standards guide implementation once code is added. They should keep the pr
 - Protect idempotency with unique database constraints and claim-first writes, not check-then-insert flows.
 - Replays must not create duplicate orders, execution reports, or trades.
 - Relay retries must not create new outbox rows for the same accepted order.
+- Consumer retries must update `processed_messages` diagnostics without acknowledging retryable failures early.
 - Conflicting reuse of an idempotency key must return `409 Conflict`.
 
 ## Observability Standards

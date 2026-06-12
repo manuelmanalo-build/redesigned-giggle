@@ -289,7 +289,7 @@ Expected failure modes:
 
 The current MVP would need these before real production deployment:
 
-- Explicit processed-message inbox table for queryable consumer idempotency and retry diagnostics.
+- Broker DLQ listener or reconciliation job that maps DLQ observations back into `processed_messages`.
 - Backward-compatible migration policy.
 - Load testing against realistic queue depth and database size.
 - Security review for authentication, authorization, network boundaries, and secret handling.

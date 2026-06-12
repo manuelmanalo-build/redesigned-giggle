@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.realtimetradeprocessing.simulator.application.OrderExecutionProcessor;
+import com.realtimetradeprocessing.simulator.application.OrderSubmittedMessageInboxProcessor;
 import com.realtimetradeprocessing.simulator.observability.TradeMetrics;
 
 import io.micrometer.core.instrument.Timer;
@@ -19,24 +19,25 @@ public class OrderSubmittedEventConsumer {
     private static final Logger LOGGER = LoggerFactory.getLogger(OrderSubmittedEventConsumer.class);
 
     private final ObjectMapper objectMapper;
-    private final OrderExecutionProcessor orderExecutionProcessor;
+    private final OrderSubmittedMessageInboxProcessor inboxProcessor;
     private final TradeMetrics tradeMetrics;
 
     public OrderSubmittedEventConsumer(
         ObjectMapper objectMapper,
-        OrderExecutionProcessor orderExecutionProcessor,
+        OrderSubmittedMessageInboxProcessor inboxProcessor,
         TradeMetrics tradeMetrics
     ) {
         this.objectMapper = objectMapper;
-        this.orderExecutionProcessor = orderExecutionProcessor;
+        this.inboxProcessor = inboxProcessor;
         this.tradeMetrics = tradeMetrics;
     }
 
     @JmsListener(destination = "${trade.messaging.order-submitted-queue:order.submitted}")
     public void receive(String payload) {
         Timer.Sample sample = tradeMetrics.startMessageProcessing();
+        OrderSubmittedEvent event = null;
         try {
-            OrderSubmittedEvent event = deserialize(payload);
+            event = deserialize(payload);
             if (event.correlationId() == null || event.correlationId().isBlank()) {
                 process(event);
                 return;
@@ -47,6 +48,9 @@ public class OrderSubmittedEventConsumer {
             }
         } catch (RuntimeException exception) {
             tradeMetrics.messageProcessingFailed();
+            if (event != null) {
+                inboxProcessor.recordFailure(event, exception);
+            }
             LOGGER.error("Failed to process order submitted message", exception);
             throw exception;
         } finally {
@@ -56,7 +60,7 @@ public class OrderSubmittedEventConsumer {
 
     private void process(OrderSubmittedEvent event) {
         LOGGER.info("Received order submitted event eventId={} orderId={}", event.eventId(), event.orderId());
-        orderExecutionProcessor.process(event);
+        inboxProcessor.process(event);
     }
 
     private OrderSubmittedEvent deserialize(String payload) {

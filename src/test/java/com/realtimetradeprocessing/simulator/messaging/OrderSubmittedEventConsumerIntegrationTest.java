@@ -3,6 +3,9 @@ package com.realtimetradeprocessing.simulator.messaging;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -14,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -23,15 +27,18 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.realtimetradeprocessing.simulator.application.ExecutionSimulator;
 import com.realtimetradeprocessing.simulator.domain.ExecutionType;
 import com.realtimetradeprocessing.simulator.domain.OrderSide;
 import com.realtimetradeprocessing.simulator.domain.OrderStatus;
 import com.realtimetradeprocessing.simulator.domain.OrderType;
 import com.realtimetradeprocessing.simulator.persistence.entity.ExecutionReportEntity;
 import com.realtimetradeprocessing.simulator.persistence.entity.OrderEntity;
+import com.realtimetradeprocessing.simulator.persistence.entity.ProcessedMessageStatus;
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OrderJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.OutboxEventJpaRepository;
+import com.realtimetradeprocessing.simulator.persistence.repository.ProcessedMessageJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.TradeJpaRepository;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -84,10 +91,16 @@ class OrderSubmittedEventConsumerIntegrationTest {
     private OutboxEventJpaRepository outboxEventRepository;
 
     @Autowired
+    private ProcessedMessageJpaRepository processedMessageRepository;
+
+    @Autowired
     private MeterRegistry meterRegistry;
 
     @MockBean
     private OrderEventPublisher orderEventPublisher;
+
+    @SpyBean
+    private ExecutionSimulator executionSimulator;
 
     @Test
     void fillsMarketOrderAndCreatesExecutionReportAndTrade() throws Exception {
@@ -107,6 +120,13 @@ class OrderSubmittedEventConsumerIntegrationTest {
                 assertThat(trade.getOrderId()).isEqualTo(event.orderId());
                 assertThat(trade.getQuantity()).isEqualTo(100);
                 assertThat(trade.getPrice()).isEqualByComparingTo("100.00");
+            });
+        assertThat(processedMessageRepository.findById(event.eventId()))
+            .hasValueSatisfying(message -> {
+                assertThat(message.getStatus()).isEqualTo(ProcessedMessageStatus.PROCESSED);
+                assertThat(message.getAttemptCount()).isEqualTo(1);
+                assertThat(message.getProcessedAt()).isNotNull();
+                assertThat(message.getCorrelationId()).isEqualTo(event.correlationId());
             });
     }
 
@@ -162,6 +182,12 @@ class OrderSubmittedEventConsumerIntegrationTest {
         assertThat(orderRepository.findById(event.orderId()).orElseThrow().getStatus()).isEqualTo(OrderStatus.FILLED);
         assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(event.orderId())).hasSize(1);
         assertThat(tradeRepository.findByOrderIdOrderByCreatedAtAsc(event.orderId())).hasSize(1);
+        assertThat(processedMessageRepository.findById(event.eventId()))
+            .hasValueSatisfying(message -> {
+                assertThat(message.getStatus()).isEqualTo(ProcessedMessageStatus.DUPLICATE);
+                assertThat(message.getAttemptCount()).isEqualTo(1);
+                assertThat(message.getProcessedAt()).isNotNull();
+            });
     }
 
     @Test
@@ -183,6 +209,8 @@ class OrderSubmittedEventConsumerIntegrationTest {
         assertThatCode(() -> consumer.receive(objectMapper.writeValueAsString(event))).doesNotThrowAnyException();
         assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc("missing-order")).isEmpty();
         assertThat(tradeRepository.findByOrderIdOrderByCreatedAtAsc("missing-order")).isEmpty();
+        assertThat(processedMessageRepository.findById(event.eventId()))
+            .hasValueSatisfying(message -> assertThat(message.getStatus()).isEqualTo(ProcessedMessageStatus.PROCESSED));
     }
 
     @Test
@@ -193,6 +221,30 @@ class OrderSubmittedEventConsumerIntegrationTest {
             .isInstanceOf(MessageConsumptionException.class);
 
         assertThat(meterRegistry.counter("trade.messages.processing.failures").count()).isEqualTo(before + 1.0);
+    }
+
+    @Test
+    void failedProcessingStoresInboxDiagnosticsAndRethrowsForBrokerRetry() throws Exception {
+        OrderSubmittedEvent event = submitAndCaptureEvent("idem-consumer-failure", request(OrderSide.BUY, OrderType.MARKET, null));
+        doThrow(new IllegalStateException("simulated execution failure")).when(executionSimulator).simulate(any());
+
+        try {
+            assertThatThrownBy(() -> consumer.receive(objectMapper.writeValueAsString(event)))
+                .isInstanceOf(IllegalStateException.class);
+        } finally {
+            reset(executionSimulator);
+        }
+
+        assertThat(processedMessageRepository.findById(event.eventId()))
+            .hasValueSatisfying(message -> {
+                assertThat(message.getStatus()).isEqualTo(ProcessedMessageStatus.FAILED);
+                assertThat(message.getAttemptCount()).isEqualTo(1);
+                assertThat(message.getLastError()).isNotBlank();
+                assertThat(message.getLastError()).contains("simulated execution failure");
+                assertThat(message.getCorrelationId()).isEqualTo(event.correlationId());
+            });
+        assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(event.orderId())).isEmpty();
+        assertThat(tradeRepository.findByOrderIdOrderByCreatedAtAsc(event.orderId())).isEmpty();
     }
 
     private OrderSubmittedEvent submitAndCaptureEvent(String idempotencyKey, String requestBody) throws Exception {

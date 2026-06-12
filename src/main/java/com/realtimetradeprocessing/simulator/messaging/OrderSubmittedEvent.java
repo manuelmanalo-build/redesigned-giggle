@@ -20,4 +20,8 @@ public record OrderSubmittedEvent(
     Instant createdAt
 ) {
     public static final String EVENT_TYPE = "OrderSubmittedEvent";
+
+    public String eventType() {
+        return EVENT_TYPE;
+    }
 }

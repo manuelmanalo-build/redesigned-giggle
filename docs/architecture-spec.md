@@ -14,7 +14,7 @@ This document describes the current MVP design and planned extensions.
 - Persistence layer: JPA entities, repositories, SQL constraints, and indexes.
 - Outbox writer and relay: persists integration events atomically with order changes, then publishes pending events to JMS.
 - Messaging producer: publishes outbox-backed `ORDER_SUBMITTED` events.
-- Messaging consumer: receives order events, simulates execution, writes execution reports and trades, and updates order state.
+- Messaging consumer: receives order events, records inbox diagnostics, simulates execution, writes execution reports and trades, and updates order state.
 - Observability layer: correlation ID filter/interceptor and structured logging.
 - Configuration layer: Spring profiles, database, JMS, listener concurrency, and retry settings.
 - Test infrastructure: unit, slice, integration, container-backed, and CI tests.
@@ -47,13 +47,15 @@ The exact package names may evolve, but framework concerns should not leak into 
 10. The relay publishes the event payload to the `order.submitted` JMS queue through `OrderEventPublisher`.
 11. The relay marks the outbox row `PUBLISHED`, or records retry state on failure.
 12. `OrderSubmittedEventConsumer` receives the message.
-13. The consumer checks message-consumption idempotency.
-14. The consumer loads and locks or conditionally updates the order.
-15. The execution simulator returns an execution outcome.
-16. The consumer writes an `ExecutionReport`.
-17. The consumer writes a `Trade` when quantity is filled.
-18. The consumer updates `OrderStatus`.
-19. Query APIs read current state and history from PostgreSQL.
+13. The consumer claims the event ID in `processed_messages`.
+14. If the message was already processed, the consumer records a duplicate observation and skips business processing.
+15. The consumer loads and locks or conditionally updates the order.
+16. The execution simulator returns an execution outcome.
+17. The consumer writes an `ExecutionReport`.
+18. The consumer writes a `Trade` when quantity is filled.
+19. The consumer updates `OrderStatus`.
+20. The consumer marks the inbox row `PROCESSED`, or stores failure diagnostics and rethrows for broker redelivery.
+21. Query APIs read current state and history from PostgreSQL.
 
 ## Transaction Boundaries
 
@@ -89,14 +91,18 @@ Tradeoff:
 The current consumer transaction:
 
 - Deserializes `OrderSubmittedEvent` outside the database transaction.
+- Claims the message ID in `processed_messages` using a database-backed `ON CONFLICT DO NOTHING` insert.
+- Locks the processed-message row while deciding whether to process or skip.
+- Skips rows already marked `PROCESSED`, `DUPLICATE`, or `DEAD_LETTERED`; duplicate observations are marked `DUPLICATE`.
 - Loads the order with a pessimistic write lock.
-- Uses a deterministic execution-report ID derived from the event ID as the current message idempotency key.
+- Still uses a deterministic execution-report ID derived from the event ID as the business idempotency backstop.
 - Skips duplicate events that already produced an execution report.
 - Creates execution report and trade records when the simulated execution fills.
 - Leaves non-marketable limit orders in `ACCEPTED` status with a non-fill execution report and no trade.
 - Updates `orders.status`, `orders.filled_quantity`, and `orders.updated_at` atomically with the execution report/trade writes.
+- Marks the processed-message row `PROCESSED` after successful processing.
 
-If any database step fails, the transaction rolls back so JMS redelivery can retry safely.
+If any database step fails, the message-processing transaction rolls back so JMS redelivery can retry safely. A separate failure-diagnostic transaction records or updates the `processed_messages` row as `FAILED`, increments `attempt_count`, and stores `last_error`.
 
 ## Idempotency Design
 
@@ -123,9 +129,15 @@ Each message must include:
 - `correlationId`
 - `occurredAt`
 
-Current MVP behavior uses deterministic execution-report IDs derived from event IDs to make duplicate delivery safe. Duplicate event IDs are acknowledged without creating duplicate trades or duplicate terminal execution reports.
+Current MVP behavior uses `processed_messages` as an inbox table for observable consumer idempotency and retry diagnostics. Deterministic execution-report IDs and unique trade constraints remain in place so business correctness does not depend only on the inbox row.
 
-A later production hardening step should add an explicit `processed_messages` inbox table so message claims, retry metadata, and DLQ diagnostics are queryable independently of execution-report IDs.
+Inbox statuses:
+
+- `RECEIVED`: message has been claimed for processing.
+- `PROCESSED`: message completed successfully.
+- `FAILED`: processing failed and the consumer rethrew so the broker can redeliver.
+- `DUPLICATE`: a terminal message was observed again and skipped.
+- `DEAD_LETTERED`: reserved diagnostic status for broker/DLQ integration.
 
 ## Concurrency Model
 
@@ -135,7 +147,7 @@ Concurrency requirements:
 
 - Order submission idempotency must be protected with a unique database constraint.
 - Consumer processing must prevent duplicate execution for the same order.
-- Current order execution processing uses a pessimistic row lock on `orders` plus deterministic report/trade IDs to handle duplicate delivery.
+- Current order execution processing uses the `processed_messages` inbox, a pessimistic row lock on `orders`, and deterministic report/trade IDs to handle duplicate delivery.
 - Later high-throughput versions can evaluate optimistic locking or conditional SQL updates.
 - Domain services should avoid mutable shared state.
 - Listener concurrency should be configurable.
@@ -149,12 +161,12 @@ Current MVP tables:
 - `trades`
 - `idempotency_records`
 - `outbox_events`
+- `processed_messages`
 
 Planned later tables:
 
 - `accounts`
 - `instruments`
-- `processed_messages`
 
 Current constraints:
 
@@ -168,6 +180,8 @@ Current constraints:
 - `idempotency_records.response_status` must be a valid HTTP status code range.
 - `outbox_events.status` is constrained to `PENDING`, `PUBLISHED`, or `FAILED`.
 - `outbox_events.attempt_count` must be non-negative.
+- `processed_messages.status` is constrained to `RECEIVED`, `PROCESSED`, `FAILED`, `DUPLICATE`, or `DEAD_LETTERED`.
+- `processed_messages.attempt_count` must be non-negative.
 - Foreign keys from execution reports, trades, and idempotency records protect references to orders.
 - Each trade references the execution report that created it, and `trades.execution_report_id` is unique so duplicate fill reports cannot create duplicate trades for the same report.
 
@@ -183,6 +197,9 @@ Current indexes:
 - `idempotency_records(idempotency_key)`
 - `outbox_events(status, next_attempt_at, created_at)`
 - `outbox_events(aggregate_type, aggregate_id)`
+- `processed_messages(status)`
+- `processed_messages(aggregate_id)`
+- `processed_messages(consumer_name, status)`
 
 Future query-oriented indexes should add `created_at` to support pagination and account/status history lookups once list endpoints exist.
 
@@ -226,22 +243,32 @@ Outbox relay:
 - Failed publication increments `attempt_count`, stores `last_error`, and sets `next_attempt_at` using simple backoff.
 - Rows are marked `FAILED` after the configured max attempts.
 
+Consumer inbox:
+
+- `OrderSubmittedMessageInboxProcessor` wraps `OrderExecutionProcessor`.
+- New messages are claimed in `processed_messages` using `eventId` as `message_id`.
+- Successful processing marks the row `PROCESSED`.
+- Duplicate terminal messages are skipped and marked `DUPLICATE`.
+- Processing failures are recorded as `FAILED` in a separate transaction so diagnostics survive the rollback that enables JMS redelivery.
+- The inbox is a diagnostic and coordination layer. Deterministic execution-report/trade IDs remain the final idempotency defense.
+
 Current tests:
 
 - The JMS publisher is unit-tested with a mocked `JmsTemplate`.
 - Outbox writer behavior is unit-tested.
 - REST integration tests verify accepted orders create one pending outbox row and invalid/conflicting submissions do not create publishable outbox rows.
 - Relay integration tests verify pending event publication, `PUBLISHED` marking, failure retry metadata, max-attempt `FAILED` behavior, and skipping already-published rows.
-- Consumer integration tests currently invoke the consumer directly against PostgreSQL to verify market fills, limit fills, limit no-fills, duplicate delivery, and missing-order safety.
+- Consumer integration tests currently invoke the consumer directly against PostgreSQL to verify market fills, limit fills, limit no-fills, missing-order safety, duplicate delivery, inbox `PROCESSED`/`DUPLICATE` rows, and failure diagnostics.
 - A broker-backed Artemis Testcontainers integration test verifies that REST submission writes the outbox, the relay publishes a real JMS message, and the asynchronous listener consumes it into an execution report, trade, and filled order state.
 
 Retry and DLQ behavior:
 
 - The relay retries publish failures using database-visible retry state.
 - Failed relay attempts are visible in `outbox_events`.
+- Consumer processing failures are visible in `processed_messages` with `status`, `attempt_count`, `last_error`, `last_seen_at`, and `correlation_id`.
 - The consumer must throw on retryable failures so the broker can redeliver.
 - JMS listener sessions are transacted in the MVP so a processing exception rolls back message acknowledgement and allows broker redelivery.
-- Poison-message behavior should be DLQ-ready even if the first version only documents broker defaults.
+- Broker-level DLQ routing is still configured outside application code. The app-side `DEAD_LETTERED` status is reserved for future broker DLQ listener or administrative reconciliation.
 - Non-retryable domain failures should create a rejected execution report and update order state.
 
 ## Observability and Operations
