@@ -55,9 +55,10 @@ public class OrderController {
     ResponseEntity<OrderResponse> replaceOrder(
         @PathVariable String orderId,
         @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 128) String idempotencyKey,
+        @RequestAttribute(CorrelationIdFilter.REQUEST_ATTRIBUTE) String correlationId,
         @Valid @RequestBody ReplaceOrderRequest request
     ) {
-        OrderSubmissionResult result = orderApplicationService.replaceOrder(orderId, request, idempotencyKey);
+        OrderSubmissionResult result = orderApplicationService.replaceOrder(orderId, request, idempotencyKey, correlationId);
         return ResponseEntity.status(result.responseStatus()).body(result.order());
     }
 

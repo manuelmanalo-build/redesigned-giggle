@@ -74,7 +74,7 @@ Rules:
 - Limit orders can be replaced only from `ACCEPTED` or `PARTIALLY_FILLED`.
 - Replacement quantity must be greater than or equal to already filled quantity.
 - Market order replacement is rejected in the MVP.
-- Replace updates the existing order row in place. This keeps the implementation small; a production system would usually preserve explicit order versions or amendment history.
+- Replace updates the existing order row in place. Accepted-order replacements are re-evaluated through the existing outbox/JMS processing path. This keeps the implementation small; a production system would usually preserve explicit order versions or amendment history.
 
 ### ExecutionReport
 
@@ -143,7 +143,7 @@ Rules:
 
 - `idempotencyKey` is unique for REST write operations.
 - Reuse with a different request fingerprint is a conflict.
-- Completed records return the same order resource and response status for equivalent retry requests.
+- Completed records return the same response status and stored response body snapshot for equivalent retry requests.
 
 ## Enums
 
@@ -351,9 +351,10 @@ Columns:
 - `request_hash`: hash or fingerprint of the original request.
 - `order_id`: nullable foreign key to `orders(id)`.
 - `response_status`: HTTP response status to replay for duplicate submissions.
+- `response_body`: stored JSON response snapshot to replay for duplicate requests with the same fingerprint.
 - `created_at`: record creation timestamp.
 
-Database constraints also enforce `response_status` in the valid HTTP status code range. REST submission claims use the `idempotency_key` primary key with PostgreSQL conflict handling so concurrent first submissions with the same key resolve to one stored order and one replayable response.
+Database constraints also enforce `response_status` in the valid HTTP status code range. REST submission claims use the `idempotency_key` primary key with PostgreSQL conflict handling so concurrent first submissions with the same key resolve to one stored order and one replayable response snapshot.
 
 Index:
 

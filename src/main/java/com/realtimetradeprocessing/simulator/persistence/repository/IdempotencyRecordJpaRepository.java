@@ -38,12 +38,14 @@ public interface IdempotencyRecordJpaRepository extends JpaRepository<Idempotenc
     @Query(value = """
         UPDATE idempotency_records
         SET order_id = :orderId,
-            response_status = :responseStatus
+            response_status = :responseStatus,
+            response_body = :responseBody
         WHERE idempotency_key = :idempotencyKey
         """, nativeQuery = true)
     int completeRequest(
         @Param("idempotencyKey") String idempotencyKey,
         @Param("orderId") String orderId,
-        @Param("responseStatus") int responseStatus
+        @Param("responseStatus") int responseStatus,
+        @Param("responseBody") String responseBody
     );
 }

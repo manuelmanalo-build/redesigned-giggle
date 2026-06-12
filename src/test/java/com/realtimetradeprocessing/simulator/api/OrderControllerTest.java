@@ -196,7 +196,7 @@ class OrderControllerTest {
 
     @Test
     void mapsReplaceConflict() throws Exception {
-        when(orderApplicationService.replaceOrder(eq("order-1"), any(), eq("idem-replace-conflict")))
+        when(orderApplicationService.replaceOrder(eq("order-1"), any(), eq("idem-replace-conflict"), any()))
             .thenThrow(new ResourceConflictException("Order cannot be replaced when status is FILLED"));
 
         mockMvc.perform(post("/api/v1/orders/order-1/replace")

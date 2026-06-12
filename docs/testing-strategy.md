@@ -41,7 +41,7 @@ Tools:
 Cover orchestration with mocked dependencies where useful:
 
 - Submit order creates idempotency record.
-- Duplicate idempotency key with same fingerprint returns the same order resource and response status.
+- Duplicate idempotency key with same fingerprint returns the stored response status and response body snapshot.
 - Duplicate idempotency key with different fingerprint fails with conflict.
 - Cancel and replace use idempotency records and replay same-key retries safely.
 - Unknown or inactive account/instrument reference data rejects before order persistence.
@@ -92,7 +92,7 @@ Run against PostgreSQL Testcontainers:
 - Table constraints enforce enum values, order type/price consistency, execution report fill-field consistency, and valid idempotency response status ranges.
 - Foreign keys protect execution report and trade relationships to orders.
 - Processed-message inbox rows, pessimistic row locking, and deterministic execution report IDs prevent duplicate message side effects in the current consumer flow.
-- Current repository query methods support order, execution-report, and trade lookup by ID/order ID. List filters and pagination are planned extensions.
+- Current repository/query methods support order, execution-report, and trade lookup by ID/order ID plus paginated operational search filters.
 - Index-backed query paths are documented where relevant.
 
 Tools:
@@ -108,8 +108,8 @@ Run against embedded Artemis or an Artemis Testcontainer:
 - API integration tests verify accepted orders create one pending outbox event and invalid/conflicting submissions do not create publishable outbox rows.
 - API integration tests verify unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are hard rejected without order/idempotency/outbox persistence.
 - API integration tests verify account/instrument reference data can be created, updated, retrieved, and then used by order submission.
-- API integration tests verify cancel and replace success paths, terminal-state conflicts, partial-fill quantity guards, idempotent replay, and execution-report creation.
-- API integration tests verify search filters, date ranges, sorting, pagination metadata, and validation failures.
+- API integration tests verify cancel and replace success paths, terminal-state conflicts, partial-fill quantity guards, idempotent response snapshot replay, accepted-replace reprocessing outbox events, and execution-report creation.
+- API integration tests verify search filters, date ranges, deterministic secondary sorting, pagination metadata, and validation failures.
 - `OutboxRelayService` integration tests verify pending event publication, successful `PUBLISHED` marking, retry state on publish failure, max-attempt `FAILED` behavior, and skipping already-published rows.
 - `JmsOrderEventPublisher` serializes `OrderSubmittedEvent` and sends it to `order.submitted`.
 - A broker-backed Artemis Testcontainers test verifies that REST order submission writes the outbox, the relay publishes a JMS message, and the asynchronous listener consumes it.

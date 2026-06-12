@@ -163,7 +163,7 @@ public class SearchApplicationService {
     ) {
         String resolvedSortBy = resolveSortBy(sortBy, allowedSortFields);
         Sort.Direction direction = resolveSortDirection(sortDirection);
-        return PageRequest.of(page, size, Sort.by(direction, resolvedSortBy));
+        return PageRequest.of(page, size, Sort.by(direction, resolvedSortBy).and(Sort.by(direction, "id")));
     }
 
     private static String resolveSortBy(String sortBy, Set<String> allowedSortFields) {

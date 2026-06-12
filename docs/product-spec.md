@@ -46,7 +46,7 @@ The MVP includes one Spring Boot service with:
 3. API creates or reuses an idempotency record for the request.
 4. API stores the order with status `ACCEPTED`.
 5. API writes a pending `ORDER_SUBMITTED` outbox event in the same database transaction as the order and idempotency record.
-6. API returns `201 Created` with order identity and current state.
+6. API stores the response snapshot for idempotent replay and returns `201 Created` with order identity and accepted state.
 7. Outbox relay polls due pending events, publishes to the JMS queue, and marks successful rows as `PUBLISHED`.
 8. Async consumer receives the event.
 9. Consumer claims or skips the message using `processed_messages`.
@@ -80,7 +80,7 @@ The MVP domain includes:
 - The system must reject malformed or invalid orders with production-style error responses.
 - The system must persist accepted orders before publishing the JMS event.
 - The system must publish exactly one logical order-submitted event per idempotent order submission.
-- The system must safely return the same order resource and response status for repeated requests with the same `Idempotency-Key` and equivalent payload.
+- The system must safely return the same response status and stored response body snapshot for repeated requests with the same `Idempotency-Key` and equivalent payload.
 - The system must reject reuse of the same `Idempotency-Key` with a materially different payload.
 - The consumer must tolerate duplicate JMS delivery without creating duplicate execution reports or trades.
 - The execution simulator must be deterministic enough for tests.

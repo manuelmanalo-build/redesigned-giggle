@@ -162,6 +162,38 @@ class OrderApiIntegrationTest {
     }
 
     @Test
+    void idempotencyReplayReturnsOriginalResponseSnapshotAfterOrderStateChanges() throws Exception {
+        clearInvocations(orderEventPublisher);
+
+        JsonNode first = objectMapper.readTree(submitOrder("idem-api-snapshot", validMarketOrderJson())
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.status").value("ACCEPTED"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString());
+
+        String orderId = first.get("orderId").asText();
+        OrderEntity order = orderRepository.findById(orderId).orElseThrow();
+        order.markFilled(100, Instant.parse("2026-06-12T15:30:00Z"));
+        orderRepository.saveAndFlush(order);
+
+        mockMvc.perform(get("/api/v1/orders/{orderId}", orderId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("FILLED"))
+            .andExpect(jsonPath("$.filledQuantity").value(100));
+
+        mockMvc.perform(post("/api/v1/orders")
+                .header("Idempotency-Key", "idem-api-snapshot")
+                .header("X-Correlation-Id", "corr-idem-api-snapshot")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(validMarketOrderJson()))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.orderId").value(orderId))
+            .andExpect(jsonPath("$.status").value("ACCEPTED"))
+            .andExpect(jsonPath("$.filledQuantity").value(0));
+    }
+
+    @Test
     void concurrentSubmissionsWithSameIdempotencyKeyReturnSameLogicalResponse() throws Exception {
         clearInvocations(orderEventPublisher);
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -713,9 +745,11 @@ class OrderApiIntegrationTest {
     @Test
     void replacesAcceptedLimitOrderAndCreatesExecutionReport() throws Exception {
         OrderEntity order = saveOrder("order-replace-accepted", OrderStatus.ACCEPTED, OrderType.LIMIT, 100, BigDecimal.valueOf(185.50), 0);
+        String correlationId = "corr-replace-accepted";
 
         mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
                 .header("Idempotency-Key", "idem-replace-accepted")
+                .header("X-Correlation-Id", correlationId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {
@@ -738,6 +772,13 @@ class OrderApiIntegrationTest {
                 assertThat(report.getExecutionType()).isEqualTo(ExecutionType.REPLACED);
                 assertThat(report.getOrderStatus()).isEqualTo(OrderStatus.ACCEPTED);
                 assertThat(report.getMessage()).contains("Client amended order");
+            });
+        assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(order.getId()))
+            .singleElement()
+            .satisfies(event -> {
+                assertThat(event.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+                assertThat(event.getEventType()).isEqualTo("OrderSubmittedEvent");
+                assertThat(event.getCorrelationId()).isEqualTo(correlationId);
             });
     }
 
@@ -766,6 +807,8 @@ class OrderApiIntegrationTest {
             .andExpect(jsonPath("$.status").value("PARTIALLY_FILLED"))
             .andExpect(jsonPath("$.quantity").value(60))
             .andExpect(jsonPath("$.filledQuantity").value(40));
+
+        assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(order.getId())).isEmpty();
     }
 
     @Test
@@ -824,12 +867,18 @@ class OrderApiIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.quantity").value(150));
 
+        OrderEntity replaced = orderRepository.findById(order.getId()).orElseThrow();
+        replaced.markFilled(150, Instant.parse("2026-06-12T15:40:00Z"));
+        orderRepository.saveAndFlush(replaced);
+
         mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
                 .header("Idempotency-Key", "idem-replace-replay")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.quantity").value(150));
+            .andExpect(jsonPath("$.status").value("ACCEPTED"))
+            .andExpect(jsonPath("$.quantity").value(150))
+            .andExpect(jsonPath("$.filledQuantity").value(0));
 
         mockMvc.perform(post("/api/v1/orders/{orderId}/replace", order.getId())
                 .header("Idempotency-Key", "idem-replace-replay")
@@ -847,6 +896,7 @@ class OrderApiIntegrationTest {
         assertThat(executionReportRepository.findByOrderIdOrderByCreatedAtAsc(order.getId()))
             .filteredOn(report -> report.getExecutionType() == ExecutionType.REPLACED)
             .hasSize(1);
+        assertThat(outboxEventRepository.findByAggregateIdOrderByCreatedAtAsc(order.getId())).hasSize(1);
     }
 
     @Test
@@ -962,6 +1012,50 @@ class OrderApiIntegrationTest {
             .andExpect(jsonPath("$.size").value(2))
             .andExpect(jsonPath("$.totalElements").value(3))
             .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    void searchOrdersUsesIdAsDeterministicSecondarySort() throws Exception {
+        Instant createdAt = Instant.parse("2026-06-12T11:30:00Z");
+        saveOrder(
+            "search-orders-tie-a",
+            "SEARCH-TIE-A",
+            "SEARCH-TIE-ACC",
+            "SRCHT",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            createdAt
+        );
+        saveOrder(
+            "search-orders-tie-b",
+            "SEARCH-TIE-B",
+            "SEARCH-TIE-ACC",
+            "SRCHT",
+            OrderSide.BUY,
+            OrderStatus.ACCEPTED,
+            OrderType.LIMIT,
+            100,
+            BigDecimal.valueOf(185.50),
+            0,
+            createdAt
+        );
+
+        mockMvc.perform(get("/api/v1/orders")
+                .param("accountId", "SEARCH-TIE-ACC")
+                .param("createdFrom", "2026-06-12T11:30:00Z")
+                .param("createdTo", "2026-06-12T11:30:00Z")
+                .param("page", "0")
+                .param("size", "2")
+                .param("sortBy", "createdAt")
+                .param("sortDirection", "desc"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(2))
+            .andExpect(jsonPath("$.items[0].orderId").value("search-orders-tie-b"))
+            .andExpect(jsonPath("$.items[1].orderId").value("search-orders-tie-a"));
     }
 
     @Test
@@ -1087,6 +1181,19 @@ class OrderApiIntegrationTest {
 
     private static String validLimitOrderJson() {
         return orderJson("ACC-001", "AAPL");
+    }
+
+    private static String validMarketOrderJson() {
+        return """
+            {
+              "clientOrderId": "CLIENT-123-MKT",
+              "accountId": "ACC-001",
+              "symbol": "AAPL",
+              "side": "BUY",
+              "type": "MARKET",
+              "quantity": 100
+            }
+            """;
     }
 
     private static String orderJson(String accountId, String symbol) {

@@ -229,7 +229,7 @@ Successful response:
 
 Idempotent replay:
 
-- Same `Idempotency-Key` and same normalized request fingerprint returns the same order resource and response status. Because asynchronous processing can update the order after the original submission, the replayed body may show the order's current state rather than the original `ACCEPTED` snapshot.
+- Same `Idempotency-Key` and same normalized request fingerprint returns the original response status and stored response body snapshot, even if asynchronous processing has since changed the current order state.
 - Same `Idempotency-Key` with a different request fingerprint returns `409 Conflict`.
 - Idempotent replay does not republish `OrderSubmittedEvent`.
 - Invalid or rejected requests do not publish `OrderSubmittedEvent`.
@@ -272,7 +272,7 @@ Successful response:
 
 `POST /api/v1/orders/{orderId}/replace`
 
-Amends an open limit order in place. The request is idempotent by `Idempotency-Key`. The same transaction updates quantity and limit price, creates a `REPLACED` execution report, and completes the idempotency record.
+Amends an open limit order in place. The request is idempotent by `Idempotency-Key`. The same transaction updates quantity and limit price, creates a `REPLACED` execution report, stores the idempotency response snapshot, and completes the idempotency record. Replacing an `ACCEPTED` order also writes a pending outbox event so the async processor can re-evaluate the amended order.
 
 Required header:
 
@@ -298,13 +298,13 @@ Validation and lifecycle rules:
 - `newLimitPrice` is optional for limit orders; when omitted, the current limit price is preserved.
 - Missing order returns `404 Not Found`.
 - `reason` is optional and capped at 500 characters.
-- Same `Idempotency-Key` and same replace request returns the same logical order resource.
+- Same `Idempotency-Key` and same replace request returns the original response status and stored response body snapshot.
 - Same `Idempotency-Key` and different replace request returns `409 Conflict`.
 
 Simplification:
 
 - Replace updates the existing order row in place rather than creating explicit order versions.
-- Replace does not publish a new JMS event in the MVP. A production order book or venue adapter would usually emit an amendment event and re-evaluate routing/execution.
+- The MVP reuses the existing `OrderSubmittedEvent` processing path for accepted-order re-evaluation after replace. A production order book or venue adapter would usually use a dedicated amendment event and preserve explicit order versions.
 
 Successful response:
 
@@ -360,7 +360,7 @@ Current response example:
 
 `GET /api/v1/orders`
 
-Returns a paginated operational view of orders. Filters are combined with `AND`. Default sort is `createdAt DESC`.
+Returns a paginated operational view of orders. Filters are combined with `AND`. Default sort is `createdAt DESC, id DESC`.
 
 Query parameters:
 
@@ -445,7 +445,7 @@ Responses:
 
 `GET /api/v1/execution-reports`
 
-Returns a paginated operational view of execution reports. Filters are combined with `AND`. Default sort is `createdAt DESC`.
+Returns a paginated operational view of execution reports. Filters are combined with `AND`. Default sort is `createdAt DESC, id DESC`.
 
 Query parameters:
 
@@ -503,7 +503,7 @@ Responses:
 
 `GET /api/v1/trades`
 
-Returns a paginated operational view of trades. Filters are combined with `AND`. Default sort is `createdAt DESC`.
+Returns a paginated operational view of trades. Filters are combined with `AND`. Default sort is `createdAt DESC, id DESC`.
 
 Query parameters:
 

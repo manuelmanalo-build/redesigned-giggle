@@ -17,6 +17,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.realtimetradeprocessing.simulator.api.CancelOrderRequest;
 import com.realtimetradeprocessing.simulator.api.ExecutionReportResponse;
 import com.realtimetradeprocessing.simulator.api.IdempotencyConflictException;
@@ -61,6 +63,7 @@ public class OrderApplicationService {
     private final OutboxEventWriter outboxEventWriter;
     private final ReferenceDataValidationService referenceDataValidationService;
     private final TradeMetrics tradeMetrics;
+    private final ObjectMapper objectMapper;
     private final Clock clock;
 
     @Autowired
@@ -71,7 +74,8 @@ public class OrderApplicationService {
         IdempotencyRecordJpaRepository idempotencyRecordRepository,
         OutboxEventWriter outboxEventWriter,
         ReferenceDataValidationService referenceDataValidationService,
-        TradeMetrics tradeMetrics
+        TradeMetrics tradeMetrics,
+        ObjectMapper objectMapper
     ) {
         this(
             orderRepository,
@@ -81,6 +85,7 @@ public class OrderApplicationService {
             outboxEventWriter,
             referenceDataValidationService,
             tradeMetrics,
+            objectMapper,
             Clock.systemUTC()
         );
     }
@@ -93,6 +98,7 @@ public class OrderApplicationService {
         OutboxEventWriter outboxEventWriter,
         ReferenceDataValidationService referenceDataValidationService,
         TradeMetrics tradeMetrics,
+        ObjectMapper objectMapper,
         Clock clock
     ) {
         this.orderRepository = orderRepository;
@@ -102,6 +108,7 @@ public class OrderApplicationService {
         this.outboxEventWriter = outboxEventWriter;
         this.referenceDataValidationService = referenceDataValidationService;
         this.tradeMetrics = tradeMetrics;
+        this.objectMapper = objectMapper;
         this.clock = clock;
     }
 
@@ -151,12 +158,18 @@ public class OrderApplicationService {
         );
         executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
         tradeMetrics.executionReportCreated();
-        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK);
-        return new OrderSubmissionResult(OK, OrderResponse.fromEntity(order));
+        OrderResponse response = OrderResponse.fromEntity(order);
+        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK, response);
+        return new OrderSubmissionResult(OK, response);
     }
 
     @Transactional
-    public OrderSubmissionResult replaceOrder(String orderId, ReplaceOrderRequest request, String idempotencyKey) {
+    public OrderSubmissionResult replaceOrder(
+        String orderId,
+        ReplaceOrderRequest request,
+        String idempotencyKey,
+        String correlationId
+    ) {
         String normalizedIdempotencyKey = requireNonBlank(idempotencyKey, "Idempotency key must not be blank");
         String requestHash = fingerprintReplace(orderId, request);
         Instant now = clock.instant();
@@ -191,8 +204,12 @@ public class OrderApplicationService {
         );
         executionReportRepository.save(ExecutionReportEntity.fromDomain(report, now));
         tradeMetrics.executionReportCreated();
-        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK);
-        return new OrderSubmissionResult(OK, OrderResponse.fromEntity(order));
+        OrderResponse response = OrderResponse.fromEntity(order);
+        completeIdempotency(normalizedIdempotencyKey, order.getId(), OK, response);
+        if (order.getStatus() == OrderStatus.ACCEPTED) {
+            outboxEventWriter.writeOrderSubmitted(toOrderSubmittedEvent(order, resolveCorrelationId(correlationId), now), now);
+        }
+        return new OrderSubmissionResult(OK, response);
     }
 
     @Transactional(readOnly = true)
@@ -226,9 +243,10 @@ public class OrderApplicationService {
             throw new IdempotencyConflictException("Idempotency key was already used with a different request");
         }
         String orderId = record.getOrderId();
-        OrderResponse response = orderRepository.findById(orderId)
-            .map(OrderResponse::fromEntity)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found for idempotency key: " + record.getIdempotencyKey()));
+        OrderResponse response = responseFromSnapshot(record)
+            .orElseGet(() -> orderRepository.findById(orderId)
+                .map(OrderResponse::fromEntity)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found for idempotency key: " + record.getIdempotencyKey())));
         return new OrderSubmissionResult(record.getResponseStatus(), response);
     }
 
@@ -237,8 +255,8 @@ public class OrderApplicationService {
             .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
     }
 
-    private void completeIdempotency(String idempotencyKey, String orderId, int responseStatus) {
-        int completed = idempotencyRecordRepository.completeRequest(idempotencyKey, orderId, responseStatus);
+    private void completeIdempotency(String idempotencyKey, String orderId, int responseStatus, OrderResponse response) {
+        int completed = idempotencyRecordRepository.completeRequest(idempotencyKey, orderId, responseStatus, serializeResponse(response));
         if (completed != 1) {
             throw new IllegalStateException("Failed to complete idempotency record: " + idempotencyKey);
         }
@@ -252,7 +270,8 @@ public class OrderApplicationService {
         Instant now
     ) {
         OrderEntity savedOrder = orderRepository.saveAndFlush(OrderEntity.fromDomain(order, normalizedClientOrderId(request), 0, now));
-        completeIdempotency(idempotencyKey, savedOrder.getId(), CREATED);
+        OrderResponse response = OrderResponse.fromEntity(savedOrder);
+        completeIdempotency(idempotencyKey, savedOrder.getId(), CREATED, response);
         tradeMetrics.orderSubmitted();
         LOGGER.info(
             "order_submission_accepted orderId={} clientOrderId={} accountId={} symbol={} side={} type={}",
@@ -264,7 +283,27 @@ public class OrderApplicationService {
             savedOrder.getType()
         );
         outboxEventWriter.writeOrderSubmitted(toOrderSubmittedEvent(savedOrder, correlationId, now), now);
-        return new OrderSubmissionResult(CREATED, OrderResponse.fromEntity(savedOrder));
+        return new OrderSubmissionResult(CREATED, response);
+    }
+
+    private java.util.Optional<OrderResponse> responseFromSnapshot(IdempotencyRecordEntity record) {
+        String responseBody = record.getResponseBody();
+        if (responseBody == null || responseBody.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            return java.util.Optional.of(objectMapper.readValue(responseBody, OrderResponse.class));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to deserialize idempotency response snapshot: " + record.getIdempotencyKey(), exception);
+        }
+    }
+
+    private String serializeResponse(OrderResponse response) {
+        try {
+            return objectMapper.writeValueAsString(response);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize idempotency response snapshot", exception);
+        }
     }
 
     private OrderSubmittedEvent toOrderSubmittedEvent(OrderEntity order, String correlationId, Instant createdAt) {

@@ -69,6 +69,7 @@ These standards guide implementation once code is added. They should keep the pr
 - REST submission idempotency is based on `Idempotency-Key` plus request fingerprint.
 - Message consumption idempotency is based on message ID.
 - Protect idempotency with unique database constraints and claim-first writes, not check-then-insert flows.
+- Store response snapshots for REST idempotency so equivalent retries replay the original response body instead of current mutable state.
 - Replays must not create duplicate orders, execution reports, or trades.
 - Relay retries must not create new outbox rows for the same accepted order.
 - Consumer retries must update `processed_messages` diagnostics without acknowledging retryable failures early.

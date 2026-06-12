@@ -23,8 +23,8 @@ Core flow:
 3. `SubmitOrderRequest` validation handles request shape.
 4. `OrderApplicationService.submitOrder` builds a domain `Order`, accepts it, and computes a SHA-256 request fingerprint.
 5. `ReferenceDataValidationService` verifies the account and instrument exist and are active.
-6. `IdempotencyRecordJpaRepository.claimSubmission` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
-7. The service saves the order, completes the idempotency record, and inserts a pending outbox row in one Spring transaction.
+6. `IdempotencyRecordJpaRepository.claimRequest` uses PostgreSQL `ON CONFLICT DO NOTHING` to claim the idempotency key.
+7. The service saves the order, stores the idempotency response snapshot, and inserts a pending outbox row in one Spring transaction.
 8. `OutboxRelayService` polls due pending rows, publishes the JSON event to JMS, and marks successful rows `PUBLISHED`.
 9. Failed relay attempts increment `attempt_count`, store `last_error`, and set `next_attempt_at` for retry.
 10. `OrderSubmittedEventConsumer` receives the JSON JMS message and delegates to `OrderSubmittedMessageInboxProcessor`.
@@ -74,7 +74,7 @@ The domain model is not just getters and setters. It encodes rules around order 
 ## 5. Multithreading And Concurrency Concepts Demonstrated
 
 - REST requests are handled concurrently by the web container, so idempotency cannot rely on in-memory checks.
-- Client retry concurrency is handled at the database layer using `INSERT ... ON CONFLICT DO NOTHING` in `IdempotencyRecordJpaRepository.claimSubmission`.
+- Client retry concurrency is handled at the database layer using `INSERT ... ON CONFLICT DO NOTHING` in `IdempotencyRecordJpaRepository.claimRequest`.
 - JMS consumers may run concurrently. The listener concurrency is configurable through Spring JMS settings.
 - Outbox relay polling can also run concurrently across instances; `FOR UPDATE SKIP LOCKED` prevents normal duplicate work on the same pending outbox row.
 - Consumer inbox rows are claimed with a database insert and then locked with `PESSIMISTIC_WRITE`, so concurrent duplicate deliveries serialize on `processed_messages.message_id`.
@@ -141,6 +141,7 @@ PostgreSQL is the source of truth. Flyway migrations define and harden the schem
 - `V7__create_reference_data.sql` creates `accounts` and `instruments` with seed rows for active and inactive cases.
 - `V8__allow_replaced_execution_reports.sql` extends execution-report constraints for replace audit records.
 - `V9__add_search_composite_indexes.sql` adds composite indexes for paginated operational searches.
+- `V10__add_idempotency_response_snapshot.sql` adds stored response bodies for strict idempotent replay.
 
 Important constraints:
 
@@ -163,7 +164,7 @@ Important constraints:
 
 Transaction boundaries:
 
-- Order submission stores the order, idempotency record, and outbox event in one `@Transactional` method.
+- Order submission stores the order, idempotency response snapshot, and outbox event in one `@Transactional` method.
 - Reference-data validation happens before the idempotency claim, so invalid account/symbol requests do not create idempotency or outbox rows.
 - The REST request does not publish directly to JMS.
 - The outbox relay locks due rows, publishes to JMS, and marks rows `PUBLISHED` or records retry state in its own transaction.
@@ -173,7 +174,7 @@ Transaction boundaries:
 
 Indexing discussion:
 
-The indexes match current query paths rather than every possible column. Search endpoints default to `createdAt DESC`, so indexes such as `(account_id, created_at DESC)`, `(symbol, created_at DESC)`, `(status, created_at DESC)`, `(account_id, status, created_at DESC)`, `(execution_type, created_at DESC)`, and `(order_id, created_at DESC)` support selective filters plus chronological pagination. This avoids indexing every filter combination while covering realistic operational views.
+The indexes match current query paths rather than every possible column. Search endpoints default to `createdAt DESC, id DESC`; indexes such as `(account_id, created_at DESC)`, `(symbol, created_at DESC)`, `(status, created_at DESC)`, `(account_id, status, created_at DESC)`, `(execution_type, created_at DESC)`, and `(order_id, created_at DESC)` support selective filters plus chronological pagination, while the `id` tie-breaker keeps page order deterministic. This avoids indexing every filter combination while covering realistic operational views.
 
 Pagination tradeoff:
 
@@ -369,7 +370,7 @@ Trade lifecycle shown by the application:
 - Async processing may leave it `ACCEPTED` with a no-fill execution report, or move it to `FILLED`.
 - A fill creates an `ExecutionReport` and a `Trade`.
 - Client cancel moves open orders to `CANCELLED` and records a cancel execution report.
-- Client replace amends open limit orders in place and records a replace execution report.
+- Client replace amends open limit orders in place, records a replace execution report, and reuses the outbox/JMS path to re-evaluate accepted replacements.
 - `PARTIALLY_FILLED` is modeled and protected by cancel/replace guards, but the simulator does not yet generate partial fills.
 
 Important honesty:
@@ -384,7 +385,7 @@ Known limitations:
 - Reference data management is intentionally minimal and does not include delete endpoints.
 - No authentication or authorization.
 - Replace updates orders in place rather than preserving explicit order versions.
-- Replace does not publish a new JMS event; a production venue adapter would usually emit an amendment event.
+- Replace reuses the existing order-submitted event path for accepted-order re-evaluation rather than modeling a dedicated amendment event.
 - No partial-fill simulation path yet, even though domain states include `PARTIALLY_FILLED`.
 - No real market data, matching engine, or external venue integration.
 - Load testing is local and diagnostic only; there is no formal capacity model, soak test, or production-like benchmark environment.
@@ -410,7 +411,7 @@ JPA entities are persistence concerns: they need annotations, no-arg constructor
 
 ### 2. How does idempotent order submission work?
 
-`POST /api/v1/orders` requires an `Idempotency-Key`. The service canonicalizes the business request fields and hashes them with SHA-256. It first builds the domain order and validates account/instrument reference data. Only valid active accounts and instruments proceed to the idempotency claim. The service then tries to insert an `idempotency_records` row using PostgreSQL `ON CONFLICT DO NOTHING`. If the insert succeeds, this request owns the key and creates the order. If it fails, the service loads the existing record: same hash returns the same order resource and response status; different hash returns `409 Conflict`. Because async processing can update the order, a replay may show current state rather than the original `ACCEPTED` snapshot. This is database-backed, so it works across concurrent requests and multiple service instances.
+`POST /api/v1/orders` requires an `Idempotency-Key`. The service canonicalizes the business request fields and hashes them with SHA-256. It first builds the domain order and validates account/instrument reference data. Only valid active accounts and instruments proceed to the idempotency claim. The service then tries to insert an `idempotency_records` row using PostgreSQL `ON CONFLICT DO NOTHING`. If the insert succeeds, this request owns the key and creates the order. The completion step stores the order ID, response status, and response body snapshot. If the insert fails, the service loads the existing record: same hash returns the stored response snapshot; different hash returns `409 Conflict`. This is database-backed, so it works across concurrent requests and multiple service instances.
 
 ### 3. What happens if the same JMS message is delivered twice?
 

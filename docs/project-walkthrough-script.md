@@ -42,9 +42,9 @@ Inside `OrderApplicationService.submitOrder`, the first important thing is idemp
 
 Then it attempts to claim the idempotency key using a PostgreSQL insert with `ON CONFLICT DO NOTHING`. That is important because it makes idempotency safe across concurrent requests and across multiple application instances. It is not an in-memory map.
 
-If the claim fails, the service loads the existing idempotency record. If the request hash matches, it returns the same order resource and response status. Because the order may have been processed asynchronously, that replay can show the current order state rather than the original `ACCEPTED` snapshot. If the hash is different, it throws an idempotency conflict and the API returns `409 Conflict`.
+If the claim fails, the service loads the existing idempotency record. If the request hash matches, it returns the stored response status and response body snapshot. That matters because the order may have been processed asynchronously after the original response. If the hash is different, it throws an idempotency conflict and the API returns `409 Conflict`.
 
-If the claim succeeds, the service creates an `Order` domain object, transitions it from `NEW` to `ACCEPTED`, saves it as an `OrderEntity`, and completes the idempotency record with the created order ID and response status.
+If the claim succeeds, the service creates an `Order` domain object, transitions it from `NEW` to `ACCEPTED`, saves it as an `OrderEntity`, and completes the idempotency record with the created order ID, response status, and response body snapshot.
 
 That order insert and idempotency update happen in the same Spring transaction as the outbox insert. That means the accepted order, replay state, and intent to publish the integration event become durable together.
 
@@ -88,7 +88,7 @@ The first is client retry idempotency for `POST /api/v1/orders`.
 
 Clients must send an `Idempotency-Key`. The service creates a normalized SHA-256 fingerprint of the business request. Then it tries to insert a row into `idempotency_records`. The primary key is the idempotency key, and the insert uses `ON CONFLICT DO NOTHING`.
 
-If the insert succeeds, this request owns the key and creates the order. If the insert does not happen because the key already exists, the service loads the record. If the fingerprint matches, it returns the same order resource and response status. If the fingerprint differs, it returns `409 Conflict`.
+If the insert succeeds, this request owns the key and creates the order. If the insert does not happen because the key already exists, the service loads the record. If the fingerprint matches, it returns the stored response snapshot. If the fingerprint differs, it returns `409 Conflict`.
 
 That is stronger than an in-memory approach because it works with multiple application instances and concurrent requests.
 
@@ -134,7 +134,7 @@ There are four core tables.
 
 `trades` stores actual fills. It references both the order and the execution report that created the trade. That execution report link is unique, so one fill report cannot create multiple trades.
 
-`idempotency_records` stores the idempotency key, request hash, created order ID, response status, and created timestamp.
+`idempotency_records` stores the idempotency key, request hash, created order ID, response status, response body snapshot, and created timestamp.
 
 The schema uses constraints as a second line of defense behind application validation. For example, quantities must be positive, filled quantity cannot exceed order quantity, side/type/status values must be valid enums, market orders cannot have a limit price, limit orders must have one, and fill execution reports must have quantity and price.
 

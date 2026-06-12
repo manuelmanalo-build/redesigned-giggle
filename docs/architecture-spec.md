@@ -94,14 +94,14 @@ Tradeoff:
 Cancel and replace requests use explicit database transactions:
 
 - `Idempotency-Key` is required for both operations.
-- The idempotency record is claimed before state changes, so equivalent retries replay the same order resource and conflicting retries return `409 Conflict`.
+- The idempotency record is claimed before state changes, so equivalent retries replay the stored response snapshot and conflicting retries return `409 Conflict`.
 - The order row is loaded with a pessimistic write lock.
 - Cancel is allowed only from `ACCEPTED` or `PARTIALLY_FILLED`; it updates status to `CANCELLED`, preserves `filled_quantity`, and creates a `CANCELLED` execution report.
-- Replace is allowed only for limit orders in `ACCEPTED` or `PARTIALLY_FILLED`; it updates the existing order row in place and creates a `REPLACED` execution report.
+- Replace is allowed only for limit orders in `ACCEPTED` or `PARTIALLY_FILLED`; it updates the existing order row in place, creates a `REPLACED` execution report, and stores the response snapshot for idempotent replay.
 - Replace requires the new quantity to be greater than or equal to `filled_quantity`.
 - Trades are never deleted by cancel or replace.
 
-Replace does not publish a JMS event in the MVP. The simulator does not maintain a live order book, so an in-place amendment plus execution-report audit is sufficient for the current scope. A production venue adapter would usually publish an amendment event and preserve explicit order versions.
+Replacing an `ACCEPTED` order writes a pending outbox event using the existing `OrderSubmittedEvent` path so the async processor can re-evaluate the amended order. Replacing a `PARTIALLY_FILLED` order records the amendment but does not reprocess it in the current simulator. A production venue adapter would usually publish a dedicated amendment event and preserve explicit order versions.
 
 ### Message Consumption Transaction
 
@@ -129,9 +129,9 @@ Clients must send `Idempotency-Key` for `POST /api/v1/orders`.
 
 Rules:
 
-- First use creates a record with request fingerprint and response reference.
+- First use creates a record with request fingerprint, response status, order reference, and response body snapshot.
 - Concurrent first use is guarded by the `idempotency_records` primary key and an `ON CONFLICT DO NOTHING` claim insert.
-- Repeated use with the same fingerprint returns the same order resource and response status. Because the async consumer may have updated the order, the replayed body can reflect current order state.
+- Repeated use with the same fingerprint returns the stored response status and response body snapshot, even if the async consumer later changed current order state.
 - Repeated use with a different fingerprint returns `409 Conflict`.
 - Idempotency records should have a creation timestamp and final status.
 
@@ -196,6 +196,7 @@ Current constraints:
 - Fill execution reports must include executed quantity and execution price; non-fill reports must not.
 - `idempotency_records.idempotency_key` is the primary key.
 - `idempotency_records.response_status` must be a valid HTTP status code range.
+- `idempotency_records.response_body` stores the response snapshot used for strict idempotent replay.
 - `outbox_events.status` is constrained to `PENDING`, `PUBLISHED`, or `FAILED`.
 - `outbox_events.attempt_count` must be non-negative.
 - `processed_messages.status` is constrained to `RECEIVED`, `PROCESSED`, `FAILED`, `DUPLICATE`, or `DEAD_LETTERED`.
@@ -231,7 +232,7 @@ Current indexes:
 - `processed_messages(aggregate_id)`
 - `processed_messages(consumer_name, status)`
 
-Search endpoints use page/size pagination with a maximum page size of `100`, default sorting by `created_at DESC`, and whitelisted sort fields only. The composite indexes are intentionally aligned to common operational access patterns: account order history, symbol activity, status queues, execution-report history by order/type, and trade history by account/symbol/order.
+Search endpoints use page/size pagination with a maximum page size of `100`, default sorting by `created_at DESC, id DESC`, and whitelisted sort fields only. The composite indexes are intentionally aligned to common operational access patterns: account order history, symbol activity, status queues, execution-report history by order/type, and trade history by account/symbol/order.
 
 Page/size pagination is simple to explain and works well for the MVP. A high-volume production feed would likely add cursor/keyset pagination using `(created_at, id)` so deep pages do not require large offsets.
 

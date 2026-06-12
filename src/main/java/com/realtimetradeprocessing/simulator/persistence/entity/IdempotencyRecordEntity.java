@@ -24,6 +24,9 @@ public class IdempotencyRecordEntity {
     @Column(name = "response_status", nullable = false)
     private int responseStatus;
 
+    @Column(name = "response_body", columnDefinition = "TEXT")
+    private String responseBody;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -37,10 +40,22 @@ public class IdempotencyRecordEntity {
         int responseStatus,
         Instant createdAt
     ) {
+        this(idempotencyKey, requestHash, orderId, responseStatus, null, createdAt);
+    }
+
+    public IdempotencyRecordEntity(
+        String idempotencyKey,
+        String requestHash,
+        String orderId,
+        int responseStatus,
+        String responseBody,
+        Instant createdAt
+    ) {
         this.idempotencyKey = idempotencyKey;
         this.requestHash = requestHash;
         this.orderId = orderId;
         this.responseStatus = responseStatus;
+        this.responseBody = responseBody;
         this.createdAt = createdAt;
     }
 
@@ -60,8 +75,11 @@ public class IdempotencyRecordEntity {
         return responseStatus;
     }
 
+    public String getResponseBody() {
+        return responseBody;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
 }
-
