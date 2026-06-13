@@ -2,189 +2,236 @@
 
 ## 1. 60-Second Overview
 
-This project is a Java 21 Spring Boot backend that simulates a simplified real-time trade processing platform.
+I would describe this project as a compact Java 21 Spring Boot backend for a simplified real-time trade processing platform.
 
-The core flow is: a client submits an order over REST, the API validates it, stores it in PostgreSQL, records idempotency state, and writes an `OrderSubmittedEvent` to a transactional outbox in the same database transaction. A relay publishes pending outbox events to a JMS queue. A separate asynchronous consumer receives that event, simulates execution, creates an execution report, creates a trade when the order fills, and updates the order status.
+A client submits an order over REST. The API validates the request, checks that the account and instrument are active, claims a database-backed idempotency key, persists the order, stores the original response snapshot, and writes an `OrderSubmittedEvent` to a transactional outbox. A scheduled relay publishes pending outbox events to an ActiveMQ Artemis JMS queue. The consumer records the event in a processed-message inbox, locks the order, simulates execution, writes an execution report, books a trade if there is a fill, and updates order state.
 
-I built it to demonstrate the backend topics that usually come up in senior Java interviews: domain modeling, REST design, SQL constraints and indexes, transaction boundaries, JMS messaging, duplicate-message safety, concurrency, observability, Testcontainers integration tests, CI, and cloud deployment tradeoffs.
+It also supports cancel and replace, paginated searches for orders/reports/trades, reference-data management, metrics, health checks, local load testing, GC logging helpers, and PostgreSQL lock diagnostics.
 
-The main thing I would emphasize is that this is intentionally not a giant system. It is a focused service where each important backend decision is visible and explainable.
+The reason this is useful for a senior Java interview is that it is not just CRUD. It shows transaction boundaries, idempotency, at-least-once messaging, SQL constraints and indexes, concurrency choices, operational diagnostics, and honest production tradeoffs.
 
-## 2. 3-Minute Architecture Walkthrough
+## 2. Architecture Overview
 
-At a high level, this is a modular Spring Boot service with clear package boundaries.
+The codebase is a modular monolith with package boundaries that are easy to explain.
 
-The `api` package owns the REST layer. `OrderController` exposes `POST /api/v1/orders`, `GET /api/v1/orders/{orderId}`, `GET /api/v1/orders/{orderId}/execution-reports`, and `GET /api/v1/orders/{orderId}/trades`. The controller stays thin. It validates request shape and delegates to the application layer.
+The `api` package owns REST controllers and DTOs. `OrderController` handles submit, cancel, replace, and order-specific reads. `SearchController` handles paginated operational views. `ReferenceDataController` handles simple account and instrument management. `GlobalApiExceptionHandler` keeps error responses consistent.
 
-The `application` package owns orchestration. `OrderApplicationService` handles order submission, idempotency, database writes, and outbox event creation. `OrderExecutionProcessor` handles the asynchronous execution workflow after a JMS message arrives. `ExecutionSimulator` is an abstraction for the market/limit fill logic.
+The `application` package owns orchestration. `OrderApplicationService` coordinates validation, idempotency, order persistence, cancel/replace, and outbox writes. `SearchApplicationService` owns filter validation and query orchestration. `ReferenceDataValidationService` checks active accounts and instruments. `OrderExecutionProcessor` owns the async execution workflow. `OrderSubmittedMessageInboxProcessor` owns consumer-side duplicate/failure tracking.
 
-The `domain` package contains the pure Java model. That includes `Order`, `Quantity`, `Price`, `ExecutionReport`, `Trade`, IDs, and enums like `OrderStatus`, `OrderType`, and `ExecutionType`. I kept database annotations out of the pure domain model so the business rules are testable without Spring or JPA.
+The `domain` package is pure Java. It has `Order`, `Quantity`, `Price`, `ExecutionReport`, `Trade`, ID wrappers, and enums like `OrderStatus`, `OrderSide`, `OrderType`, and `ExecutionType`. This is where construction rules and state transitions live.
 
-The `persistence` package contains JPA entities and repositories. PostgreSQL is the source of truth, and Flyway migrations define the schema. The schema has database constraints for important invariants, like positive quantities, valid enum values, market versus limit price rules, and one trade per execution report.
+The `persistence` package maps the database. PostgreSQL is the source of truth and Flyway migrations create the schema, constraints, and indexes.
 
-The `messaging` package contains the outbox relay and JMS pieces. There is an `OutboxRelayService`, an `OrderEventPublisher` abstraction, a `JmsOrderEventPublisher` implementation, the `OrderSubmittedEvent` payload, and an `OrderSubmittedEventConsumer`. The API/application layer does not talk directly to `JmsTemplate`.
+The `messaging` package contains `OrderSubmittedEvent`, the JMS publisher, outbox relay, scheduler, and consumer. The REST path does not call `JmsTemplate`; it writes to the outbox.
 
-The `observability` package handles correlation IDs and Micrometer metrics. REST requests get an `X-Correlation-Id`, and that same value is carried into JMS events so API and async processing can be tied together in logs.
+The `observability` package provides correlation IDs and Micrometer metrics. The same correlation ID flows from REST into the outbox event and JMS message so I can follow an order across the sync and async paths.
 
-So the architecture is a modular monolith, not microservices. I chose that because the interview value is in showing clean boundaries, transaction decisions, and failure-mode thinking without adding unnecessary distributed-system complexity.
+## 3. Order Submission Deep Dive
 
-## 3. 5-Minute Deep Dive Into Order Submission
+Order submission starts at `POST /api/v1/orders`.
 
-Order submission starts in `OrderController.submitOrder`.
+The client sends an `Idempotency-Key` header and optionally `X-Correlation-Id`. If the correlation ID is missing, `CorrelationIdFilter` creates one.
 
-The endpoint is `POST /api/v1/orders`. The client must send an `Idempotency-Key` header, and may send `X-Correlation-Id`. If the correlation ID is missing, the correlation filter generates one and stores it in the request context.
+The request shape is validated with Jakarta validation. Then the application service creates the domain order, so rules like positive quantity, nonblank account/symbol, limit orders requiring price, and market orders not requiring price are enforced outside the controller.
 
-The request body includes fields like `clientOrderId`, `accountId`, `symbol`, `side`, `type`, `quantity`, and optional `limitPrice`.
+Next, `ReferenceDataValidationService` checks the current database state. The account must exist and be `ACTIVE`; the instrument must exist and be `ACTIVE`. Unknown accounts, suspended/closed accounts, unknown symbols, halted instruments, and delisted instruments are rejected with `400 Bad Request`. Those failures do not create an order, idempotency record, or outbox event.
 
-The controller uses Jakarta validation for the API contract, but that is not the only validation. The application service converts the request into the domain model, and the domain model enforces business rules. For example, `Quantity` must be positive, `InstrumentSymbol` cannot be blank, limit orders require a price, and market orders must not include a price.
+For idempotency, the service normalizes the business request and hashes it. It claims the idempotency key by inserting into `idempotency_records` with `ON CONFLICT DO NOTHING`. If the insert fails and the hash matches, the service returns the stored response snapshot. That is important because the order may have changed asynchronously since the original response. If the hash differs, it returns `409 Conflict`.
 
-Inside `OrderApplicationService.submitOrder`, the first important thing is idempotency. The service creates a normalized fingerprint of the request. It canonicalizes the business fields, normalizes the symbol and price, and hashes the result with SHA-256.
+If the claim succeeds, the service accepts the domain order, saves it to `orders`, stores the response body/status in `idempotency_records`, and writes a pending `outbox_events` row. Those database writes are in the same Spring transaction.
 
-Then it attempts to claim the idempotency key using a PostgreSQL insert with `ON CONFLICT DO NOTHING`. That is important because it makes idempotency safe across concurrent requests and across multiple application instances. It is not an in-memory map.
+The REST request returns the accepted order. It does not publish directly to JMS. That is intentional.
 
-If the claim fails, the service loads the existing idempotency record. If the request hash matches, it returns the stored response status and response body snapshot. That matters because the order may have been processed asynchronously after the original response. If the hash is different, it throws an idempotency conflict and the API returns `409 Conflict`.
+## 4. Why The Transactional Outbox Exists
 
-If the claim succeeds, the service creates an `Order` domain object, transitions it from `NEW` to `ACCEPTED`, saves it as an `OrderEntity`, and completes the idempotency record with the created order ID, response status, and response body snapshot.
+The outbox was added to close the classic database-versus-broker reliability gap.
 
-That order insert and idempotency update happen in the same Spring transaction as the outbox insert. That means the accepted order, replay state, and intent to publish the integration event become durable together.
+If I save the order and then publish directly to JMS, two bad things can happen. The database commit can succeed while JMS publishing fails, leaving an accepted order that never gets processed. Or the JMS publish can succeed while the database transaction rolls back, leaving a consumer with an event for data that does not exist.
 
-After the transaction commits, the REST path is done. It does not publish directly to JMS. A scheduled outbox relay polls pending outbox rows, publishes the event payload to `order.submitted`, and marks the row `PUBLISHED`.
+With the outbox, the accepted order, idempotency state, and event intent commit together. `OutboxRelayService` later polls `PENDING` rows, publishes the event to `order.submitted`, and marks the row `PUBLISHED`. If publication fails, the row records `attempt_count`, `last_error`, `next_attempt_at`, and eventually `FAILED` after configured max attempts.
 
-The tradeoff is that this is still at-least-once messaging. If the relay publishes to JMS but crashes before marking the outbox row published, it may publish that event again on retry. That is why the consumer is idempotent.
+The relay uses `FOR UPDATE SKIP LOCKED`, so multiple instances can poll without normally taking the same row. The tradeoff is still at-least-once delivery. If the relay publishes to the broker and crashes before updating the row, it may publish the same event again. That is why the consumer is idempotent.
 
-The response currently returns `201 Created` with the accepted order state. Later, if I wanted the API to be more explicitly asynchronous, I could return `202 Accepted`, but because the order itself is durably created synchronously, `201` is reasonable here.
+## 5. JMS Async Processing Deep Dive
 
-## 4. 5-Minute Deep Dive Into JMS Async Processing
+The async flow starts with `OrderSubmittedEvent` on `order.submitted`.
 
-The async side starts with an `OrderSubmittedEvent` published to the `order.submitted` queue.
+`OrderSubmittedEventConsumer` receives the JSON message, deserializes it, restores the correlation ID for logging, and delegates to `OrderSubmittedMessageInboxProcessor`.
 
-The event includes the event ID, order ID, client order ID, account ID, symbol, side, type, quantity, limit price, correlation ID, and creation timestamp. The publisher serializes it explicitly as JSON and also sets JMS metadata like event type, event ID, order ID, and correlation ID.
+The inbox processor claims the `eventId` in `processed_messages`. If the message was already processed, it skips the business operation and records the duplicate observation. If the message is new, it proceeds into `OrderExecutionProcessor`.
 
-The consumer is `OrderSubmittedEventConsumer`. It receives the JMS text message, deserializes the JSON, restores the correlation ID into logging context, and delegates the business work to `OrderExecutionProcessor`.
+`OrderExecutionProcessor` derives a deterministic execution-report ID from the event ID. It checks whether that report already exists, loads the order with a pessimistic write lock, checks again after the lock, and then runs the execution simulator.
 
-The actual processing is transactional. In `OrderExecutionProcessor`, the first thing it does is derive a deterministic execution-report ID from the event ID. That gives the consumer a stable idempotency key. If that execution report already exists, the consumer treats the message as a duplicate and exits safely.
+The simulator is intentionally simple. Market orders fill completely at the configured simulated market price. Limit buys fill when the limit price is at or above the market price. Limit sells fill when the limit price is at or below the market price. Non-marketable limits get a no-fill execution report and remain `ACCEPTED`.
 
-Then it loads the order with a pessimistic write lock using `findByIdForUpdate`. That matters because JMS can redeliver messages, and multiple consumers may be active. The lock serializes processing for the same order.
+If the order fills, the processor writes an execution report, creates a trade from that report, and marks the order `FILLED`. Those writes happen in one transaction with the inbox row moving to `PROCESSED`.
 
-After acquiring the lock, it checks again whether the deterministic execution report already exists. This second check closes the race where two consumers start at nearly the same time and one wins just before the other acquires the lock.
+If processing fails, the message-processing transaction rolls back and a separate diagnostic path updates `processed_messages` with `FAILED`, attempt count, and last error. The listener is transacted, so retry/redelivery remains the broker's job.
 
-If the order is missing, the consumer logs and skips. If the order is not in `ACCEPTED` status, it also skips, because it should not reprocess a filled, cancelled, or rejected order.
+## 6. Inbox / Processed-Message Explanation
 
-Then it delegates to `ExecutionSimulator`.
+The processed-message inbox exists because the broker only gives at-least-once delivery.
 
-The current simulator is deterministic. Market orders fill completely at the configured simulated market price. Limit buy orders fill if the limit price is greater than or equal to the simulated market price. Limit sell orders fill if the limit price is less than or equal to the simulated market price. If the limit order is not marketable, the system writes a no-fill execution report and leaves the order `ACCEPTED`.
+The table is `processed_messages`. It stores `message_id`, event type, aggregate ID, consumer name, status, timestamps, attempt count, last error, and correlation ID.
 
-If there is a fill, the processor creates an `ExecutionReport`, creates a `Trade` from that report, saves both, and marks the order filled. Those writes happen in one transaction with the order update.
+I would explain it this way: the outbox protects the producer side from losing the intent to publish; the inbox protects the consumer side from repeating side effects and gives operators diagnostics when retries or DLQ behavior happen.
 
-JMS listener sessions are configured as transacted, so if processing throws an exception, message acknowledgement can roll back and the broker can redeliver. The code also has duplicate protection because at-least-once delivery is the normal expectation with messaging.
+The inbox is not the only safety net. The business layer still uses deterministic execution-report IDs, row locking, and a unique trade-to-execution-report constraint. That way the system remains safe even if a duplicate gets past the diagnostic layer.
 
-The consumer now uses a processed-message inbox table. It claims the event ID before doing business work, marks successful messages `PROCESSED`, marks duplicate observations `DUPLICATE`, and stores failure diagnostics like attempt count and last error when processing throws. The deterministic execution report ID still remains as a business-level safety net.
+## 7. REST And JMS Idempotency
 
-## 5. 3-Minute Explanation Of Idempotency
+There are two separate idempotency strategies.
 
-There are two idempotency problems in this project.
+For REST, clients supply `Idempotency-Key`. The service hashes a normalized request and stores the original response snapshot in `idempotency_records`. Same key plus same request returns the original response. Same key plus different request returns `409 Conflict`. This is used for submit, cancel, and replace.
 
-The first is client retry idempotency for `POST /api/v1/orders`.
+For JMS, the event has an `eventId`. The consumer stores that in `processed_messages`, skips already processed events, derives deterministic execution-report IDs, locks the order row, and relies on database uniqueness to prevent duplicate trades.
 
-Clients must send an `Idempotency-Key`. The service creates a normalized SHA-256 fingerprint of the business request. Then it tries to insert a row into `idempotency_records`. The primary key is the idempotency key, and the insert uses `ON CONFLICT DO NOTHING`.
+The key point is that idempotency is durable and database-backed. There is no in-memory dedupe map that would fail when the app scales horizontally.
 
-If the insert succeeds, this request owns the key and creates the order. If the insert does not happen because the key already exists, the service loads the record. If the fingerprint matches, it returns the stored response snapshot. If the fingerprint differs, it returns `409 Conflict`.
+## 8. Trade Lifecycle Script
 
-That is stronger than an in-memory approach because it works with multiple application instances and concurrent requests.
+The lifecycle I can demonstrate is:
 
-The second idempotency problem is message consumption.
+Submit: the client posts an order.
 
-JMS delivery is at least once. So the consumer assumes the same event can arrive more than once. It derives a deterministic execution-report ID from the event ID. If that report already exists, the event has already been processed. The consumer also locks the order row and checks again inside the lock.
+Accept/reject: valid active account/instrument orders are accepted; invalid reference data is rejected before persistence.
 
-For fills, the trade has a deterministic ID as well, and the database enforces that a trade references one execution report with a unique `execution_report_id`. That means duplicate processing cannot create multiple trades for the same fill report.
+Execute: accepted orders flow through the outbox, relay, JMS queue, and consumer.
 
-The project also has a processed-message inbox table. That gives operational visibility into processed message IDs, duplicate observations, attempts, failures, and the metadata I would need for retry or DLQ investigation.
+Fill/no-fill: market orders and marketable limits fill; non-marketable limits stay accepted with a no-fill report.
 
-## 6. 3-Minute Explanation Of Concurrency And Throughput
+Partially fill/fill: the domain and persistence model support `PARTIALLY_FILLED` and `FILLED`; the current simulator does full fill or no-fill, while partial-fill state is used in lifecycle guards.
 
-Concurrency appears in two places: REST submission and JMS consumption.
+Cancel: open accepted or partially filled orders can be cancelled. The order becomes `CANCELLED`, a cancel execution report is written, and existing trades remain.
 
-For REST, multiple clients can submit the same request at the same time. The service does not try to solve that with Java synchronization because that would only work inside one JVM. Instead, PostgreSQL enforces the idempotency key with a primary key and an atomic `ON CONFLICT DO NOTHING` insert.
+Replace: open limit orders can be amended in place. The service validates the new quantity, ensures it does not go below already filled quantity, writes a `REPLACED` execution report, and for accepted orders writes another outbox event so the amended order can be re-evaluated.
 
-For JMS, multiple listener threads can consume messages. The system uses a pessimistic write lock when processing an order, so two consumers cannot update the same order lifecycle at the same time.
+Book trade: fills create a trade tied to the fill execution report.
 
-That is a correctness-first choice. It is easy to reason about and interview-friendly.
+The production caveat is that replace should eventually have explicit order versions and a dedicated amendment event.
 
-The throughput tradeoff is that pessimistic locks can limit performance if many messages target the same order or if processing inside the transaction becomes slow. For this MVP, the transaction is small: load order, simulate execution, insert report, insert trade if needed, update order.
+## 9. SQL Schema And Indexes
 
-If I needed higher throughput, I would look at a few options:
+The schema is managed by Flyway and PostgreSQL enforces important invariants.
 
-- Use conditional SQL updates or optimistic locking instead of pessimistic locking.
-- Partition messages by order ID or account ID so related work is serialized before it hits the database.
-- Tune JMS listener concurrency and Hikari pool size together.
-- Add composite indexes for query paths before scaling the database vertically.
-- Watch queue depth, message age, DB locks, connection pool wait time, and p99 processing duration.
+The core tables are `orders`, `execution_reports`, `trades`, and `idempotency_records`. Reliability tables are `outbox_events` and `processed_messages`. Reference-data tables are `accounts` and `instruments`.
 
-The important point is that adding more consumers is not always the fix. If the database or broker is saturated, more workers can make latency worse.
+Important constraints include positive quantity/price, valid enum values, market-versus-limit price rules, filled quantity not exceeding quantity, fill execution reports requiring quantity and price, and one trade per execution report.
 
-## 7. 3-Minute Explanation Of SQL Schema And Indexes
+Indexes are chosen for the actual access paths:
 
-The schema is managed with Flyway and PostgreSQL is the source of truth.
+`orders(account_id, created_at DESC)`, `orders(symbol, created_at DESC)`, `orders(status, created_at DESC)`, and `orders(account_id, status, created_at DESC)` support operational order views.
 
-There are four core tables.
+`execution_reports(order_id, created_at DESC)` and `trades(order_id, created_at DESC)` support order lifecycle reads.
 
-`orders` stores the current order state. It has the system ID, client order ID, account ID, symbol, side, type, status, quantity, limit price, filled quantity, and timestamps.
+`trades(account_id, created_at DESC)` and `trades(symbol, created_at DESC)` support operational trade views.
 
-`execution_reports` stores lifecycle events from processing. It references `orders`, records execution type, resulting order status, executed quantity, execution price, message, and created timestamp.
+`outbox_events(status, next_attempt_at, created_at)` supports relay polling.
 
-`trades` stores actual fills. It references both the order and the execution report that created the trade. That execution report link is unique, so one fill report cannot create multiple trades.
+`processed_messages(status)` and `(consumer_name, status)` support retry and DLQ diagnostics.
 
-`idempotency_records` stores the idempotency key, request hash, created order ID, response status, response body snapshot, and created timestamp.
+The default search sort is `createdAt DESC, id DESC`. The ID tie-breaker makes pages stable when timestamps tie.
 
-The schema uses constraints as a second line of defense behind application validation. For example, quantities must be positive, filled quantity cannot exceed order quantity, side/type/status values must be valid enums, market orders cannot have a limit price, limit orders must have one, and fill execution reports must have quantity and price.
+## 10. Search API Explanation
 
-The indexes match current and planned access patterns:
+The search endpoints are:
 
-- `orders.client_order_id` supports client/FIX-style lookup.
-- `orders.account_id`, `orders.symbol`, and `orders.status` support operational filtering.
-- `execution_reports.order_id` supports lifecycle history reads.
-- `trades.order_id` supports trade history by order.
-- `trades.execution_report_id` supports the one-report-to-one-trade invariant.
-- `idempotency_records.idempotency_key` makes the retry path explicit, even though the primary key already provides that access path.
+- `GET /api/v1/orders`
+- `GET /api/v1/execution-reports`
+- `GET /api/v1/trades`
 
-For operational list endpoints, the schema has composite indexes like `(account_id, created_at DESC)`, `(status, created_at DESC)`, and `(order_id, created_at DESC)` so common filtered searches can still return newest-first pages efficiently.
+They support page/size pagination with default size `20` and max size `100`. Filters are typed where possible: order status, side, type, execution type, date ranges, account ID, symbol, client order ID, and order ID.
 
-## 8. 2-Minute JVM/GC Talking Point
+Sort fields are whitelisted in `SearchApplicationService`. That avoids exposing arbitrary SQL ordering from request parameters.
 
-For JVM and GC, I would focus on latency and allocation pressure.
+The tradeoff is offset pagination. It is simple and works for demo/admin views. For high-volume production screens, I would add keyset pagination using `(created_at, id)`.
 
-This service allocates objects through JSON DTOs, domain records, JPA entities, BigDecimal prices, log context, and JMS payload serialization. That is normal for a Spring Boot service, but under load it can show up as increased allocation rate and more frequent GC.
+## 11. Performance And Load Testing
 
-I would start with G1GC, bounded heap settings, and GC logs for local profiling. The repo includes JVM/GC notes and helper scripts for local GC logging.
+I added local performance diagnostics rather than a fake enterprise benchmark.
 
-If p99 latency increased, I would not immediately tune the heap. I would first check whether the spike lines up with GC pauses. If it does, I would inspect allocation rate, object churn, heap sizing, and pause times. If it does not, I would look at thread dumps, Hikari pool wait, PostgreSQL locks, slow queries, broker queue depth, and redeliveries.
+The k6 script is `scripts/load/order-load-test.js`. It submits a mix of market orders, fillable limit orders, non-fillable limit orders, and invalid reference-data requests. It also queries order, execution-report, trade, and search endpoints during load.
 
-The main interview point is that JVM tuning is only one part of latency investigation. In a service like this, database locks or connection pool starvation are just as likely as GC to cause p99 problems.
+The docs explain how to watch:
 
-## 9. 2-Minute Testing, CI/CD Talking Point
+- API p50/p95/p99 and throughput from k6.
+- `http.server.requests` metrics.
+- `trade.messages.processing.duration`.
+- Hikari active, idle, pending, and acquire metrics.
+- Outbox and processed-message status counts.
+- Artemis queue depth and redeliveries.
+- PostgreSQL lock waits using `scripts/sql/db-lock-diagnostics.sql`.
+- GC behavior using `scripts/run-local-with-gc-logs.sh`.
 
-The testing strategy is layered.
+I would frame this as diagnostic readiness. The project gives me enough signals to decide whether a bottleneck is in the REST path, outbox relay, broker, consumer, database, connection pool, or JVM.
 
-There are pure unit tests for domain behavior like order validation, state transitions, value objects, execution reports, trades, and the execution simulator.
+## 12. JVM / GC And P99 Answer
 
-There are controller tests for REST validation and error handling.
+If an interviewer asks about high p99 latency, I would say:
 
-There are PostgreSQL Testcontainers integration tests for persistence, schema constraints, idempotency uniqueness, trade persistence, and database-level invariants.
+First I would locate the path. Is it order submission, search, outbox relay, or JMS processing? Then I would correlate k6 p99, Micrometer timers, Hikari acquire/pending metrics, PostgreSQL locks, outbox backlog, broker queue depth, processed-message failures, thread dumps, CPU, and GC logs.
 
-There are messaging tests at multiple levels: a unit test for the JMS publisher, direct consumer integration tests against PostgreSQL, and a broker-backed end-to-end test that submits an order over REST, publishes to Artemis, consumes asynchronously, and verifies the order becomes filled with an execution report and trade.
+For the JVM specifically, I would check whether GC pause timestamps line up with latency spikes. This app allocates through Jackson DTOs and event payloads, JPA entities, domain records, `BigDecimal`, and logging MDC. If GC aligns with p99, I would inspect allocation rate, heap size, object churn, and pause times. If GC is quiet but Hikari pending or PostgreSQL locks are high, I would fix database pressure before touching JVM flags.
 
-The CI pipeline uses GitHub Actions. It sets up Java 21, caches Maven dependencies, runs compile checks, runs `./mvnw -B clean verify`, and builds a Docker image.
+The senior answer is: do not tune the JVM blindly. Prove whether the latency is GC, database, broker, queueing, connection-pool, or thread contention.
 
-The main point I would make is that the tests prove behavior against real dependencies where it matters. I avoided H2 for persistence because PostgreSQL constraints, locking, and SQL behavior are part of the system design.
+## 13. Queue Depth And Backpressure Answer
 
-## 10. Strong Closing Answer: What I Would Improve Next
+If queue depth rises, I would separate the backlogs.
 
-The next thing I would improve is consumer-side operational visibility.
+If `outbox_events` are stuck in `PENDING`, the relay is slow or broker publishing is failing.
 
-The project now uses a transactional outbox. Order submission writes the order, idempotency record, and outbox event in one transaction. A separate relay publishes those events to the broker, marks them published, and retries failures. That gives durability and operational visibility for producer-side messaging.
+If Artemis `order.submitted` depth is growing, publication is working but consumers are not keeping up.
 
-The project also uses a processed-message inbox. That makes duplicate observations and failed attempts queryable. The next production step would be broker-level DLQ integration: either a DLQ listener or an operational reconciliation job that marks poisoned messages `DEAD_LETTERED` and links them to broker diagnostics.
+If `processed_messages` has `FAILED` rows, consumers are receiving messages but business processing is failing.
 
-After that, I would add authentication and authorization, explicit order amendment versions, amendment events for replace, keyset pagination for deep searches, partial-fill simulation, and production-like capacity tests built from the current local load diagnostics.
+Then I would check processing duration, Hikari pending threads, PostgreSQL lock waits, broker redeliveries, CPU, and whether a hot order/account is causing contention.
 
-So my closing summary would be: this project is interview-ready as a compact backend system because it demonstrates the important decisions clearly. For production, I would harden the async reliability model, security model, and operational runbooks before scaling it further.
+I would not automatically add consumers. More consumers help only if consumers are CPU-bound and the database/broker can handle more concurrency. If the bottleneck is DB locks or connection pool exhaustion, more consumers make p99 worse.
+
+## 14. Hikari Pool Pressure Answer
+
+Hikari pool pressure means requests or consumers are waiting for database connections.
+
+I would check `hikaricp.connections.active`, `idle`, `pending`, and `acquire`. If pending is above zero, I would ask why connections are held too long.
+
+Possible causes in this app are slow search queries, missing indexes, lock waits during order processing, too much JMS concurrency for the pool size, long transactions, or database saturation.
+
+The fix is not always increasing the pool. I would first inspect query plans, lock diagnostics, transaction scope, and consumer concurrency. The Hikari pool has to be sized together with web threads, JMS listener concurrency, and the PostgreSQL/RDS connection limit.
+
+## 15. DB Lock Diagnosis Answer
+
+This project intentionally uses locks where correctness matters: idempotency primary-key claims, outbox `FOR UPDATE SKIP LOCKED`, processed-message claims, and pessimistic order row locking during execution.
+
+If p99 spikes and I suspect locks, I would run `scripts/sql/db-lock-diagnostics.sql` while load is running. I would look for blocked sessions, blocker PIDs, wait events, transaction age, and SQL text.
+
+Then I would map that back to the code path. Is the same order being processed repeatedly? Is the relay holding locks too long? Is a search query forcing scans? Is JMS concurrency higher than the database can support?
+
+The design keeps transactions small, so persistent lock waits would tell me where to refine query patterns, indexes, or concurrency settings.
+
+## 16. Known Limitations
+
+The limitations I would say out loud are:
+
+- The simulator does not yet generate partial fills, even though the domain supports the state.
+- Replace updates the current row instead of preserving full order version history.
+- Accepted replace reuses `OrderSubmittedEvent`; production should likely have `OrderReplacedEvent`.
+- There is no broker-level DLQ listener that marks inbox rows `DEAD_LETTERED`.
+- Search uses offset pagination.
+- Reference-data APIs are simple and not secured.
+- There is no authentication or authorization.
+- The load test is local and diagnostic, not a production capacity certification.
+- There is no AWS IaC yet.
+- The FIX parser is educational and not a FIX engine.
+
+## 17. Strong Closing Answer: What I Would Improve Next
+
+The next production-grade improvements would be security, stronger lifecycle modeling, and operational hardening.
+
+I would add authentication and authorization, separate admin/reference-data permissions from trading operations, and add a DLQ listener or reconciliation job that links broker DLQ messages back to `processed_messages`.
+
+For the order lifecycle, I would add explicit order versions, a dedicated amendment event for replace, realistic partial-fill simulation, tick-size checks, account trading permissions, and instrument trading-session rules.
+
+For scale, I would add keyset pagination, production-like performance baselines, CloudWatch dashboards and alarms, and AWS IaC for ECS, RDS, Amazon MQ, Secrets Manager, KMS, and blue/green deployment.
+
+My closing line would be: this project is interview-ready because it demonstrates the hard backend conversations in a small codebase: correctness first, explicit transaction boundaries, idempotency, at-least-once messaging, SQL design, operational diagnostics, and clear production tradeoffs.
