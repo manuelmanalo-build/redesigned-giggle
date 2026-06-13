@@ -8,6 +8,8 @@ This document defines the REST API contract for the current MVP implementation a
 
 - Base path: `/api/v1`.
 - JSON request and response bodies.
+- OpenAPI JSON is exposed at `/v3/api-docs`.
+- Swagger UI is exposed at `/swagger-ui.html`.
 - API DTOs must be separate from JPA entities.
 - `POST /orders` currently persists and accepts a valid order synchronously, then returns `201 Created`.
 - All `POST /orders` requests require `Idempotency-Key`.
@@ -30,6 +32,27 @@ This document defines the REST API contract for the current MVP implementation a
 - `Location`: planned response header on successful order submission, pointing to `/api/v1/orders/{orderId}`.
 
 ## Endpoints
+
+### OpenAPI and Swagger UI
+
+`GET /v3/api-docs`
+
+Returns the generated OpenAPI JSON document for the public REST APIs.
+
+`GET /v3/api-docs.yaml`
+
+Returns the generated OpenAPI YAML document.
+
+`GET /swagger-ui.html`
+
+Redirects to the local Swagger UI page for interactive API exploration.
+
+Notes:
+
+- The OpenAPI document includes order, search, reference-data, request, response, and common error schemas.
+- `Idempotency-Key` and `X-Correlation-Id` headers are documented on write operations.
+- Actuator health and metrics endpoints remain available separately under `/actuator`.
+- Retry/DLQ diagnostics are currently persisted in `processed_messages`; no diagnostics REST endpoint is implemented in the MVP.
 
 ### List Accounts
 

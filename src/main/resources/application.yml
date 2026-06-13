@@ -43,6 +43,9 @@ management:
       show-components: always
       show-details: when_authorized
 
+springdoc:
+  show-actuator: true
+
 server:
   port: ${SERVER_PORT:8080}
 

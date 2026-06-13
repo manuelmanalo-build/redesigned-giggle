@@ -48,6 +48,7 @@ $LimitKey = "demo-limit-$RunId"
 $AmendKey = "demo-amend-$RunId"
 $ReplaceKey = "demo-replace-$RunId"
 $CancelKey = "demo-cancel-$RunId"
+New-Item -ItemType Directory -Force -Path target | Out-Null
 ```
 
 ## 4. View And Manage Reference Data
@@ -72,10 +73,12 @@ $CreateAccountBody = @"
   "status": "ACTIVE"
 }
 "@
+$CreateAccountFile = "target\demo-create-account-$RunId.json"
+Set-Content -Path $CreateAccountFile -Value $CreateAccountBody -Encoding utf8
 
 curl.exe -s -X POST "$BaseUrl/api/v1/accounts" `
   -H "Content-Type: application/json" `
-  --data $CreateAccountBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+  --data-binary "@$CreateAccountFile" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 
 $CreateInstrumentBody = @"
 {
@@ -86,10 +89,12 @@ $CreateInstrumentBody = @"
   "tickSize": 0.01
 }
 "@
+$CreateInstrumentFile = "target\demo-create-instrument-$RunId.json"
+Set-Content -Path $CreateInstrumentFile -Value $CreateInstrumentBody -Encoding utf8
 
 curl.exe -s -X POST "$BaseUrl/api/v1/instruments" `
   -H "Content-Type: application/json" `
-  --data $CreateInstrumentBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+  --data-binary "@$CreateInstrumentFile" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 
 $UpdateInstrumentBody = @"
 {
@@ -99,10 +104,12 @@ $UpdateInstrumentBody = @"
   "tickSize": 0.01
 }
 "@
+$UpdateInstrumentFile = "target\demo-update-instrument-$RunId.json"
+Set-Content -Path $UpdateInstrumentFile -Value $UpdateInstrumentBody -Encoding utf8
 
 curl.exe -s -X PUT "$BaseUrl/api/v1/instruments/$DemoSymbol" `
   -H "Content-Type: application/json" `
-  --data $UpdateInstrumentBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+  --data-binary "@$UpdateInstrumentFile" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 ```
 
 The order examples below use seeded `ACC-001` and `AAPL` to keep the main trade-processing flow predictable.
@@ -122,13 +129,15 @@ $MarketBody = @"
   "quantity": 100
 }
 "@
+$MarketFile = "target\demo-market-$RunId.json"
+Set-Content -Path $MarketFile -Value $MarketBody -Encoding utf8
 
 $MarketResponse = curl.exe -s -X POST "$BaseUrl/api/v1/orders" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $MarketKey" `
   -H "X-Correlation-Id: corr-market-$RunId" `
-  --data $MarketBody | ConvertFrom-Json
+  --data-binary "@$MarketFile" | ConvertFrom-Json
 
 $MarketResponse | ConvertTo-Json -Depth 5
 $MarketOrderId = $MarketResponse.orderId
@@ -156,13 +165,15 @@ $LimitBody = @"
   "limitPrice": 105.00
 }
 "@
+$LimitFile = "target\demo-limit-$RunId.json"
+Set-Content -Path $LimitFile -Value $LimitBody -Encoding utf8
 
 $LimitResponse = curl.exe -s -X POST "$BaseUrl/api/v1/orders" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $LimitKey" `
   -H "X-Correlation-Id: corr-limit-$RunId" `
-  --data $LimitBody | ConvertFrom-Json
+  --data-binary "@$LimitFile" | ConvertFrom-Json
 
 $LimitResponse | ConvertTo-Json -Depth 5
 $LimitOrderId = $LimitResponse.orderId
@@ -277,13 +288,15 @@ $AmendBody = @"
   "limitPrice": 90.00
 }
 "@
+$AmendFile = "target\demo-amend-$RunId.json"
+Set-Content -Path $AmendFile -Value $AmendBody -Encoding utf8
 
 $AmendResponse = curl.exe -s -X POST "$BaseUrl/api/v1/orders" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $AmendKey" `
   -H "X-Correlation-Id: corr-amend-$RunId" `
-  --data $AmendBody | ConvertFrom-Json
+  --data-binary "@$AmendFile" | ConvertFrom-Json
 
 $AmendOrderId = $AmendResponse.orderId
 ```
@@ -298,12 +311,14 @@ $ReplaceBody = @"
   "reason": "Client amended order"
 }
 "@
+$ReplaceFile = "target\demo-replace-$RunId.json"
+Set-Content -Path $ReplaceFile -Value $ReplaceBody -Encoding utf8
 
 curl.exe -s -X POST "$BaseUrl/api/v1/orders/$AmendOrderId/replace" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $ReplaceKey" `
-  --data $ReplaceBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+  --data-binary "@$ReplaceFile" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 ```
 
 Cancel the same open order:
@@ -314,12 +329,14 @@ $CancelBody = @"
   "reason": "Client requested cancel"
 }
 "@
+$CancelFile = "target\demo-cancel-$RunId.json"
+Set-Content -Path $CancelFile -Value $CancelBody -Encoding utf8
 
 curl.exe -s -X POST "$BaseUrl/api/v1/orders/$AmendOrderId/cancel" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $CancelKey" `
-  --data $CancelBody | ConvertFrom-Json | ConvertTo-Json -Depth 5
+  --data-binary "@$CancelFile" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 
 curl.exe -s "$BaseUrl/api/v1/orders/$AmendOrderId/execution-reports" | ConvertFrom-Json | ConvertTo-Json -Depth 5
 ```
@@ -340,12 +357,13 @@ curl.exe -i -s -X POST "$BaseUrl/api/v1/orders" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $MarketKey" `
   -H "X-Correlation-Id: corr-market-replay-$RunId" `
-  --data $MarketBody
+  --data-binary "@$MarketFile"
 ```
 
 Expected result:
 
-- The API returns the same order ID and response status. If async processing has already completed, the body may show the current `FILLED` state rather than the original `ACCEPTED` state.
+- The API returns the same order ID, response status, and stored response snapshot from the original request.
+- Even if async processing has already filled the order, the replay body should still show the original `ACCEPTED` response snapshot.
 - The `orderId` should match `$MarketOrderId`.
 - The event is not republished for the replay.
 
@@ -364,13 +382,15 @@ $ConflictBody = @"
   "quantity": 200
 }
 "@
+$ConflictFile = "target\demo-conflict-$RunId.json"
+Set-Content -Path $ConflictFile -Value $ConflictBody -Encoding utf8
 
 curl.exe -i -s -X POST "$BaseUrl/api/v1/orders" `
   -H "Content-Type: application/json" `
   -H "Accept: application/json" `
   -H "Idempotency-Key: $MarketKey" `
   -H "X-Correlation-Id: corr-market-conflict-$RunId" `
-  --data $ConflictBody
+  --data-binary "@$ConflictFile"
 ```
 
 Expected result:

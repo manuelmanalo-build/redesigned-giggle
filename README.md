@@ -60,6 +60,7 @@ This project is designed to demonstrate:
 - [JVM and GC Performance Notes](docs/jvm-gc-performance-notes.md)
 - [Performance Load Testing](docs/performance-load-testing.md)
 - [Demo Script](docs/demo-script.md)
+- [Known Limitations](docs/known-limitations.md)
 - [Project Walkthrough Script](docs/project-walkthrough-script.md)
 - [Interview Talking Points](docs/interview-talking-points.md)
 
@@ -71,6 +72,26 @@ Prerequisites:
 - Docker and Docker Compose.
 
 The repository includes the Maven wrapper. On macOS/Linux/GitHub Actions use `./mvnw`; on Windows PowerShell use `.\mvnw.cmd`.
+
+Clean-clone setup:
+
+```bash
+git clone https://github.com/manuelmanalo-build/redesigned-giggle.git
+cd redesigned-giggle
+docker compose up -d
+./mvnw clean verify
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+git clone https://github.com/manuelmanalo-build/redesigned-giggle.git
+cd redesigned-giggle
+docker compose up -d
+.\mvnw.cmd clean verify
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+```
 
 Start local infrastructure:
 
@@ -164,6 +185,13 @@ Useful operational endpoints:
 - `GET /actuator/metrics/hikaricp.connections.pending`
 - `GET /actuator/metrics/hikaricp.connections.acquire`
 
+API documentation endpoints:
+
+- `GET /v3/api-docs`: OpenAPI JSON for REST client generation.
+- `GET /v3/api-docs.yaml`: OpenAPI YAML.
+- `GET /swagger-ui.html`: Swagger UI for local API exploration.
+- `GET /swagger-ui/index.html`: Swagger UI target page after redirect.
+
 REST responses include an `X-Correlation-Id` response header. If the client does not provide one, the application generates one and uses it in logs and order-submitted events.
 
 If Java and Maven were installed project-locally under `.toolchain`, load them in the current PowerShell session with:
@@ -231,6 +259,10 @@ Optional helper scripts:
 For a targeted local load test around API p95/p99 latency, queue depth, Hikari pool pressure, and PostgreSQL lock diagnostics, see [docs/performance-load-testing.md](docs/performance-load-testing.md).
 
 The k6 scenario lives in [scripts/load/order-load-test.js](scripts/load/order-load-test.js). It is manual by design and is not part of normal CI.
+
+## Release Checkpoint
+
+The current release checkpoint is `v1.0.0-backend-mvp`. See [CHANGELOG.md](CHANGELOG.md) for the MVP summary and [docs/known-limitations.md](docs/known-limitations.md) for honest remaining limitations.
 
 ## Development Workflow
 

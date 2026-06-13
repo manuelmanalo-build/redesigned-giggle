@@ -1,8 +1,15 @@
 package com.realtimetradeprocessing.simulator;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
 
 import com.realtimetradeprocessing.simulator.persistence.repository.ExecutionReportJpaRepository;
 import com.realtimetradeprocessing.simulator.persistence.repository.IdempotencyRecordJpaRepository;
@@ -23,7 +30,11 @@ import com.realtimetradeprocessing.simulator.messaging.OrderEventPublisher;
     "trade.messaging.jms-listener-enabled=false",
     "trade.outbox.scheduling-enabled=false"
 })
+@AutoConfigureMockMvc
 class RealtimeTradeProcessingSimulatorApplicationTests {
+
+    @Autowired
+    private MockMvc mockMvc;
 
     @MockBean
     private OrderJpaRepository orderRepository;
@@ -54,5 +65,26 @@ class RealtimeTradeProcessingSimulatorApplicationTests {
 
     @Test
     void contextLoads() {
+    }
+
+    @Test
+    void exposesOpenApiDocumentation() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.openapi").exists())
+            .andExpect(jsonPath("$.info.title").value("Realtime Trade Processing Simulator API"))
+            .andExpect(jsonPath("$.paths['/api/v1/orders']").exists())
+            .andExpect(jsonPath("$.paths['/api/v1/orders/{orderId}/cancel']").exists())
+            .andExpect(jsonPath("$.paths['/api/v1/orders/{orderId}/replace']").exists())
+            .andExpect(jsonPath("$.paths['/api/v1/execution-reports']").exists())
+            .andExpect(jsonPath("$.paths['/api/v1/trades']").exists())
+            .andExpect(jsonPath("$.paths['/actuator/health']").exists())
+            .andExpect(jsonPath("$.components.schemas.ApiErrorResponse").exists());
+    }
+
+    @Test
+    void exposesSwaggerUi() throws Exception {
+        mockMvc.perform(get("/swagger-ui.html"))
+            .andExpect(status().is3xxRedirection());
     }
 }
