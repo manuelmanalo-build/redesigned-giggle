@@ -1,0 +1,22 @@
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">RT</span>
+      <div>
+        <strong>Trade Ops Demo</strong>
+        <small>Backend lifecycle UI</small>
+      </div>
+    </div>
+
+    <nav aria-label="Main navigation">
+      <a routerLink="/dashboard" routerLinkActive="active">Dashboard</a>
+      <a routerLink="/submit-order" routerLinkActive="active">Submit Order</a>
+      <a routerLink="/orders" routerLinkActive="active">Orders Search</a>
+      <a routerLink="/diagnostics" routerLinkActive="active">Diagnostics</a>
+    </nav>
+  </aside>
+
+  <main class="content">
+    <router-outlet />
+  </main>
+</div>

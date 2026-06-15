@@ -149,6 +149,16 @@ Run the demo:
 
 - Follow [docs/demo-script.md](docs/demo-script.md) for copy/paste `curl` commands that submit orders, show idempotency, and inspect health/metrics.
 
+Run the Angular demo UI:
+
+```powershell
+cd frontend
+npm install
+npm start
+```
+
+Open `http://localhost:4200`. The frontend dev server proxies `/api`, `/actuator`, and `/v3` to the backend at `http://localhost:8080`. See [frontend/README.md](frontend/README.md).
+
 Run tests:
 
 ```bash
