@@ -76,6 +76,12 @@ Start PostgreSQL and ActiveMQ Artemis:
 docker compose up -d
 ```
 
+Run PostgreSQL, ActiveMQ Artemis, and the backend container:
+
+```bash
+docker compose --profile backend up -d --build
+```
+
 Run the application:
 
 ```bash

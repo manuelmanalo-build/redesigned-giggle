@@ -35,7 +35,8 @@ This document records the intentional limits of the `v1.0.0-backend-mvp` checkpo
 - The load-testing setup is a local diagnostic aid, not a production capacity benchmark.
 - JVM/GC scripts are local helpers and not tuned production runtime settings.
 - Observability uses logs and Micrometer/Actuator metrics, but there are no prebuilt dashboards or alerts.
-- AWS deployment is documented conceptually, but no Terraform, CloudFormation, CDK, or deployment pipeline is implemented.
+- AWS deployment is documented conceptually, including ECS/RDS/Amazon MQ design notes, but no Terraform, CloudFormation, CDK, or deployment pipeline is implemented.
+- The Docker/Compose packaging supports a local deployment-shaped demo; it is not a substitute for a hardened production platform with TLS, identity, network policy, autoscaling policies, dashboards, and alarms.
 
 ## FIX Support
 

@@ -57,9 +57,12 @@ This project is designed to demonstrate:
 - [Engineering Standards](docs/engineering-standards.md)
 - [FIX Protocol Notes](docs/fix-protocol-notes.md)
 - [AWS Deployment Notes](docs/aws-deployment-notes.md)
+- [Deployment Runbook](docs/deployment-runbook.md)
+- [AWS Deployment Design](docs/aws-deployment-design.md)
 - [JVM and GC Performance Notes](docs/jvm-gc-performance-notes.md)
 - [Performance Load Testing](docs/performance-load-testing.md)
 - [Demo Script](docs/demo-script.md)
+- [Demo Video Script](docs/demo-video-script.md)
 - [Known Limitations](docs/known-limitations.md)
 - [Project Walkthrough Script](docs/project-walkthrough-script.md)
 - [Interview Talking Points](docs/interview-talking-points.md)
@@ -106,6 +109,20 @@ This starts:
 - Artemis web console on `http://localhost:8161`.
 - Accepted orders are first written to `outbox_events`; the relay publishes pending rows to the JMS queue `order.submitted`.
 - The local application consumes `order.submitted` by default, tracks processing in `processed_messages`, and writes execution reports, trades, and order status updates.
+
+Run the backend as a container with the same local PostgreSQL and Artemis dependencies:
+
+```bash
+docker compose --profile backend up -d --build
+```
+
+Windows PowerShell:
+
+```powershell
+docker compose --profile backend up -d --build
+```
+
+The backend container reads runtime configuration from environment variables. Copy `.env.example` to `.env` for local overrides. See [docs/deployment-runbook.md](docs/deployment-runbook.md).
 
 Default local credentials:
 
@@ -223,6 +240,7 @@ docker compose up -d
 ./scripts/run-load-demo.sh
 k6 run scripts/load/order-load-test.js
 docker build -t realtime-trade-processing-simulator:local .
+docker compose --profile backend up -d --build
 docker compose down
 ```
 

@@ -3,9 +3,11 @@ target/
 .github/
 .idea/
 .vscode/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
 *.iml
 *.log
 docker-data/
 tmp/
 temp/
-

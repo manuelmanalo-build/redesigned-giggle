@@ -1,4 +1,41 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: realtime-trade-processing-simulator:local
+    container_name: trade-simulator-backend
+    profiles:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      artemis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/trade_simulator
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-trade_user}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-trade_password}
+      SPRING_ARTEMIS_BROKER_URL: tcp://artemis:61616
+      SPRING_ARTEMIS_USER: ${SPRING_ARTEMIS_USER:-artemis}
+      SPRING_ARTEMIS_PASSWORD: ${SPRING_ARTEMIS_PASSWORD:-artemis}
+      TRADE_ORDER_SUBMITTED_QUEUE: ${TRADE_ORDER_SUBMITTED_QUEUE:-order.submitted}
+      TRADE_OUTBOX_RELAY_INTERVAL_MS: ${TRADE_OUTBOX_RELAY_INTERVAL_MS:-1000}
+      TRADE_OUTBOX_BATCH_SIZE: ${TRADE_OUTBOX_BATCH_SIZE:-25}
+      TRADE_OUTBOX_MAX_ATTEMPTS: ${TRADE_OUTBOX_MAX_ATTEMPTS:-5}
+      SPRING_JMS_LISTENER_CONCURRENCY: ${SPRING_JMS_LISTENER_CONCURRENCY:-1}
+      SPRING_JMS_LISTENER_MAX_CONCURRENCY: ${SPRING_JMS_LISTENER_MAX_CONCURRENCY:-4}
+      JAVA_OPTS: ${JAVA_OPTS:--XX:InitialRAMPercentage=50 -XX:MaxRAMPercentage=75 -XX:+UseG1GC}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:8080/actuator/health/readiness >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
   postgres:
     image: postgres:16-alpine
     container_name: trade-simulator-postgres
@@ -37,4 +74,3 @@ services:
 volumes:
   postgres-data:
   artemis-data:
-
